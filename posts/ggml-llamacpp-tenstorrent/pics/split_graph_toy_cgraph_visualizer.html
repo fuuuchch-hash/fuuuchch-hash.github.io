@@ -1,0 +1,1187 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ggml scheduler - toy decoder cgraph split_graph visualization</title>
+  <style>
+    :root {
+      --bg: #f5f7f5;
+      --panel: #ffffff;
+      --ink: #172023;
+      --muted: #58656a;
+      --line: #d8dddb;
+      --line-strong: #abb6b4;
+      --tt: #087f79;
+      --tt-pale: #d9f0ee;
+      --cpu: #52616a;
+      --cpu-pale: #e7ecef;
+      --copy: #b96b13;
+      --copy-pale: #fff0dc;
+      --leaf: #6459a8;
+      --leaf-pale: #edeafb;
+      --pending: #f7f8f8;
+      --pending-stroke: #b9c1c1;
+      --focus: #182d31;
+      --radius: 7px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+      letter-spacing: 0;
+    }
+
+    .page {
+      max-width: 1390px;
+      margin: 0 auto;
+      padding: 20px 22px 22px;
+    }
+
+    h1 {
+      margin: 0 0 5px;
+      font-size: 22px;
+      line-height: 1.3;
+      font-weight: 650;
+    }
+
+    .subtitle {
+      margin: 0;
+      max-width: 1050px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .assumption {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      margin: 17px 0 14px;
+      padding: 11px 13px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: var(--radius);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .assumption strong {
+      color: var(--ink);
+      font-weight: 600;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 25px;
+      padding: 0 9px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .badge::before {
+      content: "";
+      width: 9px;
+      height: 9px;
+      border-radius: 2px;
+      background: currentColor;
+    }
+
+    .badge.tt {
+      color: var(--tt);
+      background: var(--tt-pale);
+      border-color: #b8dfdc;
+    }
+
+    .badge.cpu {
+      color: var(--cpu);
+      background: var(--cpu-pale);
+      border-color: #ccd5d9;
+    }
+
+    .badge.copy {
+      color: var(--copy);
+      background: var(--copy-pale);
+      border-color: #f1d5ae;
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .stage-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+
+    button {
+      height: 36px;
+      padding: 0 11px;
+      color: var(--ink);
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      background: var(--panel);
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      border-color: #778482;
+    }
+
+    button:focus-visible {
+      outline: 2px solid var(--tt);
+      outline-offset: 1px;
+    }
+
+    .stage-tabs button.active {
+      border-color: var(--focus);
+      color: #fff;
+      background: var(--focus);
+    }
+
+    .play-controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .play-controls button {
+      width: 40px;
+      padding: 0;
+      font-size: 16px;
+      line-height: 1;
+    }
+
+    .speed {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-left: 7px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .speed input {
+      width: 82px;
+      accent-color: var(--tt);
+    }
+
+    .workbench {
+      display: grid;
+      grid-template-columns: minmax(560px, 1fr) 410px;
+      gap: 14px;
+      align-items: start;
+    }
+
+    .graph-panel,
+    .side-panel,
+    .bottom-panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px 9px;
+      border-bottom: 1px solid #eef1ef;
+    }
+
+    .panel-header h2,
+    .side-panel h2,
+    .bottom-panel h2 {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.3;
+      font-weight: 600;
+    }
+
+    .panel-note {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .graph-wrap {
+      height: min(1040px, calc(100vh - 212px));
+      min-height: 695px;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    #graph {
+      display: block;
+      width: 100%;
+      min-width: 550px;
+      height: auto;
+    }
+
+    .side-panel {
+      padding: 15px 15px 13px;
+      position: sticky;
+      top: 15px;
+    }
+
+    .pass-label {
+      margin-bottom: 5px;
+      color: var(--tt);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    #passTitle {
+      margin-bottom: 7px;
+      font-size: 18px;
+    }
+
+    #passSummary {
+      margin: 0 0 13px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .rule {
+      margin: 0 0 13px;
+      padding: 10px 11px;
+      border-left: 3px solid var(--tt);
+      background: #f3f8f7;
+      color: #334046;
+      font-family: Consolas, "Cascadia Mono", monospace;
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-line;
+    }
+
+    .side-title {
+      margin: 17px 0 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .events {
+      display: grid;
+      gap: 6px;
+    }
+
+    .event {
+      padding: 7px 9px;
+      border: 1px solid #e5eae7;
+      border-radius: 5px;
+      background: #fafbfa;
+      color: #354247;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .event .mark {
+      display: inline-block;
+      min-width: 30px;
+      margin-right: 7px;
+      padding: 1px 4px;
+      border-radius: 3px;
+      text-align: center;
+      font-weight: 650;
+    }
+
+    .mark.tt {
+      color: var(--tt);
+      background: var(--tt-pale);
+    }
+
+    .mark.cpu {
+      color: var(--cpu);
+      background: var(--cpu-pale);
+    }
+
+    .mark.copy {
+      color: var(--copy);
+      background: var(--copy-pale);
+    }
+
+    .node-info {
+      min-height: 102px;
+      padding: 10px 11px;
+      border: 1px solid #e5eae7;
+      border-radius: 5px;
+      background: #fafbfa;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .node-info strong {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--ink);
+      font-size: 13px;
+    }
+
+    .node-info dl {
+      display: grid;
+      grid-template-columns: 72px 1fr;
+      gap: 3px 5px;
+      margin: 0;
+    }
+
+    .node-info dt {
+      color: var(--muted);
+    }
+
+    .node-info dd {
+      margin: 0;
+    }
+
+    .bottom-panel {
+      grid-column: 1 / -1;
+      margin-top: 14px;
+      padding: 13px 14px;
+    }
+
+    .bottom-panel h2 {
+      margin-bottom: 10px;
+    }
+
+    .splits {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(180px, 1fr));
+      gap: 8px;
+    }
+
+    .split {
+      min-height: 66px;
+      padding: 8px 9px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      font-size: 12px;
+      line-height: 1.42;
+    }
+
+    .split strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .split.tt {
+      border-color: #b8dfdc;
+      background: #f2f9f8;
+    }
+
+    .split.cpu {
+      border-color: #ccd5d9;
+      background: #f4f6f7;
+    }
+
+    .empty-message {
+      grid-column: 1 / -1;
+      padding: 6px 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .source {
+      margin: 12px 1px 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 1060px) {
+      .workbench {
+        grid-template-columns: 1fr;
+      }
+
+      .side-panel {
+        position: static;
+      }
+
+      .graph-wrap {
+        height: auto;
+        min-height: 0;
+        overflow-x: auto;
+      }
+
+      .splits {
+        grid-template-columns: repeat(2, minmax(190px, 1fr));
+      }
+    }
+
+    @media (max-width: 600px) {
+      .page {
+        padding: 14px 10px;
+      }
+
+      h1 {
+        font-size: 19px;
+      }
+
+      .controls {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .splits {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <h1>ggml scheduler：toy decoder cgraph 的五次分配过程</h1>
+    <p class="subtitle">用同一张简化计算图观察 assignment 如何形成、连续节点如何切成 split，以及跨 backend 输入在何处需要 copy tensor。图中把重复的矩阵乘路径合并显示；点击节点可查看原始输入依赖。</p>
+
+    <section class="assumption" aria-label="示例假设">
+      <strong>演示设定</strong>
+      <span class="badge tt">TT [0] 高优先级</span>
+      <span class="badge cpu">CPU [1] 兜底</span>
+      <span>TT 在本例只接收标出的 MUL_MAT 与 ADD；RMS_NORM、SOFT_MAX、SILU/MUL 留在 CPU。</span>
+      <span>这是 split_graph 规则演示，不代表任一版 Tenstorrent backend 的完整支持范围。</span>
+    </section>
+
+    <div class="controls">
+      <nav class="stage-tabs" id="stageTabs" aria-label="流程步骤"></nav>
+      <div class="play-controls" aria-label="播放控制">
+        <button id="prevButton" title="上一步" aria-label="上一步">&#9664;</button>
+        <button id="playButton" title="自动播放" aria-label="自动播放">&#9654;</button>
+        <button id="nextButton" title="下一步" aria-label="下一步">&#9654;&#124;</button>
+        <label class="speed">
+          速度
+          <input id="speedControl" type="range" min="700" max="2600" value="1600" step="100">
+        </label>
+      </div>
+    </div>
+
+    <div class="workbench">
+      <section class="graph-panel">
+        <div class="panel-header">
+          <h2>Toy decoder block cgraph</h2>
+          <span class="panel-note">虚线支路表示 residual 依赖；橙色表示跨 backend copy</span>
+        </div>
+        <div class="graph-wrap">
+          <svg id="graph" viewBox="0 0 930 1060" role="img" aria-label="按 pass 更新 backend 分配的 decoder 计算图"></svg>
+        </div>
+      </section>
+
+      <aside class="side-panel">
+        <div class="pass-label" id="passLabel"></div>
+        <h2 id="passTitle"></h2>
+        <p id="passSummary"></p>
+        <div class="rule" id="passRule"></div>
+
+        <div class="side-title">当前变化</div>
+        <div class="events" id="events"></div>
+
+        <div class="side-title">选中节点</div>
+        <div class="node-info" id="nodeInfo"></div>
+      </aside>
+
+      <section class="bottom-panel">
+        <h2>Pass 5 输出的 splits[]</h2>
+        <div class="splits" id="splits"></div>
+      </section>
+    </div>
+
+    <p class="source">规则依据：本地 llama.cpp 源码中 ggml/src/ggml-backend.cpp 的 ggml_backend_sched_split_graph 实现，以及 ggml/include/ggml-backend.h 对 scheduler backend 优先级的接口说明。节点放置与算子覆盖为本页的教学示例。</p>
+  </main>
+
+  <script>
+    (function () {
+      "use strict";
+
+      var SVG_NS = "http://www.w3.org/2000/svg";
+      var colors = {
+        ink: "#172023",
+        muted: "#58656a",
+        edge: "#b5c0be",
+        tt: "#087f79",
+        ttFill: "#d9f0ee",
+        cpu: "#52616a",
+        cpuFill: "#e7ecef",
+        copy: "#b96b13",
+        copyFill: "#fff0dc",
+        leaf: "#6459a8",
+        leafFill: "#edeafb",
+        pending: "#f7f8f8",
+        pendingStroke: "#b9c1c1",
+        selected: "#172023"
+      };
+
+      var nodes = [
+        { id: "x0", label: "x0", op: "GET_ROWS", src: "tok_embeddings, tokens", support: "CPU", anchor: "CPU", reason: "token 与 embedding leaf 在 CPU buffer" },
+        { id: "n0", label: "n0", op: "RMS_NORM", src: "x0, attn_norm", support: "CPU", reason: "本示例的 TT 不接收 RMS_NORM" },
+        { id: "qkv", label: "q, k, v", op: "MUL_MAT x3", src: "wq/wk/wv, n0", support: "TT / CPU", anchor: "TT", reason: "预放置在 TT 的 attention 权重形成锚点" },
+        { id: "score", label: "score", op: "MUL_MAT", src: "k, q", support: "TT / CPU", reason: "与 q/k 同属 TT 可支持路径" },
+        { id: "prob", label: "prob", op: "SOFT_MAX", src: "score", support: "CPU", reason: "本示例的 TT 不接收 SOFT_MAX" },
+        { id: "attn", label: "ctx, attn_out", op: "MUL_MAT x2", src: "v, prob; wo, ctx", support: "TT / CPU", anchor: "TT", reason: "预放置在 TT 的 wo 权重形成锚点" },
+        { id: "x1", label: "x1", op: "ADD", src: "x0, attn_out", support: "TT / CPU", reason: "TT 支持 ADD，沿 attention 输出扩展" },
+        { id: "n1", label: "n1", op: "RMS_NORM", src: "x1, ffn_norm", support: "CPU", reason: "本示例的 TT 不接收 RMS_NORM" },
+        { id: "gateup", label: "gate, up", op: "MUL_MAT x2", src: "w_gate/w_up, n1", support: "TT / CPU", anchor: "TT", reason: "预放置在 TT 的 FFN 权重形成锚点" },
+        { id: "ffnmid", label: "act, ffn_mid", op: "SILU + MUL", src: "gate, up", support: "CPU", reason: "本示例的 TT 不接收 SILU/MUL 路径" },
+        { id: "ffnout", label: "ffn_out", op: "MUL_MAT", src: "w_down, ffn_mid", support: "TT / CPU", anchor: "TT", reason: "预放置在 TT 的 w_down 形成锚点" },
+        { id: "x2", label: "x2", op: "ADD", src: "x1, ffn_out", support: "TT / CPU", reason: "TT 支持 ADD，沿 FFN 输出扩展" },
+        { id: "logits", label: "logits", op: "MUL_MAT", src: "lm_head, x2", support: "TT / CPU", anchor: "TT", reason: "预放置在 TT 的 lm_head 形成锚点" }
+      ];
+
+      var leafLabels = {
+        x0: "tokens + tok_embeddings / CPU buffer",
+        qkv: "wq, wk, wv / TT buffer",
+        attn: "wo / TT buffer",
+        gateup: "w_gate, w_up / TT buffer",
+        ffnout: "w_down / TT buffer",
+        logits: "lm_head / TT buffer"
+      };
+
+      var stages = [
+        {
+          tab: "输入图",
+          label: "Pass 0 / 输入",
+          title: "尚未生成 assignment",
+          summary: "cgraph 已包含结果 tensor、op 与输入依赖；部分权重或输入 leaf 已有 buffer 归属，节点还未全部分配到 backend。",
+          rule: "input: cgraph.nodes[] + cgraph.leafs[]\nknown: pre-allocated leaf buffers\npending: node backend assignment",
+          assigned: {},
+          events: [
+            { type: "TT", text: "TT 权重 leaf：wq/wk/wv、wo、FFN 权重、lm_head" },
+            { type: "CPU", text: "CPU 输入 leaf：tokens 与 tok_embeddings" },
+            { type: "", text: "节点边框为空表示 assignment 尚未确定" }
+          ]
+        },
+        {
+          tab: "Pass 1",
+          label: "Pass 1 / 初始位置",
+          title: "从已有 buffer 得到锚点",
+          summary: "scheduler 先查看已有 buffer 归属的 leaf 和 node。能由当前数据位置确定 backend 的节点先获得 assignment，已有手工分配不会被覆盖。",
+          rule: "for leaf/node with backend_id == -1:\n  backend_id = backend_id_from_cur(tensor)",
+          assigned: {
+            x0: "CPU",
+            qkv: "TT",
+            attn: "TT",
+            gateup: "TT",
+            ffnout: "TT",
+            logits: "TT"
+          },
+          events: [
+            { type: "CPU", text: "x0 被 CPU 输入/embedding buffer 锚定" },
+            { type: "TT", text: "q,k,v 与 attention output 路径被 TT 权重锚定" },
+            { type: "TT", text: "FFN 矩阵乘与 logits 被 TT 权重锚定" }
+          ]
+        },
+        {
+          tab: "Pass 2",
+          label: "Pass 2 / 扩展",
+          title: "沿相邻可支持节点扩展分配",
+          summary: "源码注释将非最低优先级 backend 称为 GPU；在本例中它对应 TT。前两次扫描只传播 TT，随后再允许 CPU 传播。扩展始终受 supports_op 限制。",
+          rule: "expand non-CPU down/up\nexpand all backends down/up\nassign only when supports_op(backend, node)",
+          assigned: {
+            x0: "CPU",
+            n0: "CPU",
+            qkv: "TT",
+            score: "TT",
+            attn: "TT",
+            x1: "TT",
+            gateup: "TT",
+            ffnout: "TT",
+            x2: "TT",
+            logits: "TT"
+          },
+          events: [
+            { type: "TT", text: "score 的 MUL_MAT 接续 q/k 路径，进入 TT" },
+            { type: "TT", text: "x1 与 x2 的 ADD 可由 TT 路径向外扩展" },
+            { type: "CPU", text: "后续扫描从 x0 向下扩展，n0 的 RMS_NORM 进入 CPU" },
+            { type: "", text: "prob、n1、act/ffn_mid 仍未分配：相邻 TT 路径不能接收这些示例算子" }
+          ]
+        },
+        {
+          tab: "Pass 3",
+          label: "Pass 3 / 补齐",
+          title: "为剩余节点选择可执行 backend",
+          summary: "尚未分配的节点会在支持该 op 的 backend 中比较可直接接住的输入数量。已分配节点仅在兼容条件成立时尝试提升到更高优先级 backend。",
+          rule: "unassigned: choose backend with most supported inputs\nassigned: upgrade only to lower index when buft and inputs fit",
+          assigned: {
+            x0: "CPU",
+            n0: "CPU",
+            qkv: "TT",
+            score: "TT",
+            prob: "CPU",
+            attn: "TT",
+            x1: "TT",
+            n1: "CPU",
+            gateup: "TT",
+            ffnmid: "CPU",
+            ffnout: "TT",
+            x2: "TT",
+            logits: "TT"
+          },
+          events: [
+            { type: "CPU", text: "prob、n1、act/ffn_mid 在剩余候选中由 CPU 接收" },
+            { type: "TT", text: "已落在 TT 的矩阵乘和 ADD 保持不变" },
+            { type: "", text: "此时每个可执行节点已有 backend assignment" }
+          ]
+        },
+        {
+          tab: "Pass 4",
+          label: "Pass 4 / 输入补齐",
+          title: "补齐 src 和 view 的 backend 归属",
+          summary: "本页为可读性没有单列 view 节点，因此节点颜色不变。实际图中，view 可继承其原始 tensor 的位置；还没有归属的 src 会按使用它的目标节点补齐。",
+          rule: "view node: inherit backend from view_src\nunassigned src: inherit backend from destination node\nremaining node: first backend that supports_op",
+          assigned: {
+            x0: "CPU",
+            n0: "CPU",
+            qkv: "TT",
+            score: "TT",
+            prob: "CPU",
+            attn: "TT",
+            x1: "TT",
+            n1: "CPU",
+            gateup: "TT",
+            ffnmid: "CPU",
+            ffnout: "TT",
+            x2: "TT",
+            logits: "TT"
+          },
+          events: [
+            { type: "", text: "toy 图未展开 view_src，节点 assignment 无可见变化" },
+            { type: "CPU", text: "CPU 路径消费的未标注输入在执行前具备归属" },
+            { type: "TT", text: "TT 路径消费的未标注输入同样被补齐" }
+          ]
+        },
+        {
+          tab: "Pass 5",
+          label: "Pass 5 / 切分与 copy",
+          title: "连续 backend 形成 split",
+          summary: "本例中的 split 由连续节点的 backend 变化触发。实现中还会在异地权重的 buffer 不兼容，或 split 的跨 backend 输入达到上限时切出新段。输入无法被当前 backend 直接读取时，scheduler 会创建 copy tensor。",
+          rule: "new split if backend changes,\n  incompatible offloaded weight requires a new segment,\n  or cross-backend input limit is reached\nif src backend differs and buffer is unsupported:\n  create copy tensor; replace node.src[j]",
+          assigned: {
+            x0: "CPU",
+            n0: "CPU",
+            qkv: "TT",
+            score: "TT",
+            prob: "CPU",
+            attn: "TT",
+            x1: "TT",
+            n1: "CPU",
+            gateup: "TT",
+            ffnmid: "CPU",
+            ffnout: "TT",
+            x2: "TT",
+            logits: "TT"
+          },
+          events: [
+            { type: "COPY", text: "n0 CPU -> TT：q,k,v 需要归一化后的输入" },
+            { type: "COPY", text: "score TT -> CPU -> prob CPU -> TT：SOFT_MAX 引入往返" },
+            { type: "COPY", text: "FFN 中的 CPU 激活路径使 x1/n1/gateup/ffn_mid 跨 backend 传递" },
+            { type: "", text: "本 toy 图未专门演示权重 buffer 冲突或 MAX_SPLIT_INPUTS 上限触发的新 split" }
+          ]
+        }
+      ];
+
+      var splits = [
+        { backend: "CPU", nodes: ["x0", "n0"], inputs: [] },
+        { backend: "TT", nodes: ["qkv", "score"], inputs: ["n0"] },
+        { backend: "CPU", nodes: ["prob"], inputs: ["score"] },
+        { backend: "TT", nodes: ["attn", "x1"], inputs: ["prob", "x0"] },
+        { backend: "CPU", nodes: ["n1"], inputs: ["x1"] },
+        { backend: "TT", nodes: ["gateup"], inputs: ["n1"] },
+        { backend: "CPU", nodes: ["ffnmid"], inputs: ["gateup"] },
+        { backend: "TT", nodes: ["ffnout", "x2", "logits"], inputs: ["ffnmid"] }
+      ];
+
+      var copyEdges = [
+        { from: "n0", to: "qkv", text: "copy" },
+        { from: "score", to: "prob", text: "copy" },
+        { from: "prob", to: "attn", text: "copy" },
+        { from: "x0", to: "x1", text: "copy" },
+        { from: "x1", to: "n1", text: "copy" },
+        { from: "n1", to: "gateup", text: "copy" },
+        { from: "gateup", to: "ffnmid", text: "copy" },
+        { from: "ffnmid", to: "ffnout", text: "copy" }
+      ];
+
+      var sequentialEdges = [
+        ["x0", "n0"], ["n0", "qkv"], ["qkv", "score"], ["score", "prob"],
+        ["prob", "attn"], ["attn", "x1"], ["x1", "n1"], ["n1", "gateup"],
+        ["gateup", "ffnmid"], ["ffnmid", "ffnout"], ["ffnout", "x2"], ["x2", "logits"]
+      ];
+      var residualEdges = [["x0", "x1"], ["x1", "x2"]];
+
+      var currentStage = 0;
+      var selectedNode = "qkv";
+      var timer = null;
+      var nodePositions = {};
+
+      var graph = document.getElementById("graph");
+      var stageTabs = document.getElementById("stageTabs");
+      var eventsEl = document.getElementById("events");
+      var nodeInfo = document.getElementById("nodeInfo");
+      var splitsEl = document.getElementById("splits");
+      var playButton = document.getElementById("playButton");
+      var speedControl = document.getElementById("speedControl");
+
+      function svg(name, attrs, text) {
+        var el = document.createElementNS(SVG_NS, name);
+        Object.keys(attrs || {}).forEach(function (key) {
+          el.setAttribute(key, attrs[key]);
+        });
+        if (text !== undefined) {
+          el.textContent = text;
+        }
+        return el;
+      }
+
+      function clear(el) {
+        while (el.firstChild) {
+          el.removeChild(el.firstChild);
+        }
+      }
+
+      function backendFor(nodeId) {
+        return stages[currentStage].assigned[nodeId] || "";
+      }
+
+      function setTabs() {
+        clear(stageTabs);
+        stages.forEach(function (stage, i) {
+          var button = document.createElement("button");
+          button.type = "button";
+          button.textContent = stage.tab;
+          button.className = i === currentStage ? "active" : "";
+          button.setAttribute("aria-current", i === currentStage ? "step" : "false");
+          button.addEventListener("click", function () {
+            stop();
+            currentStage = i;
+            render();
+          });
+          stageTabs.appendChild(button);
+        });
+      }
+
+      function yFor(id) {
+        return nodePositions[id].y;
+      }
+
+      function drawArrowMarker() {
+        var defs = svg("defs");
+        var arrow = svg("marker", {
+          id: "arrow",
+          viewBox: "0 0 10 10",
+          refX: "9",
+          refY: "5",
+          markerWidth: "6",
+          markerHeight: "6",
+          orient: "auto-start-reverse"
+        });
+        arrow.appendChild(svg("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: colors.edge }));
+        defs.appendChild(arrow);
+        var copyArrow = svg("marker", {
+          id: "copyArrow",
+          viewBox: "0 0 10 10",
+          refX: "9",
+          refY: "5",
+          markerWidth: "6",
+          markerHeight: "6",
+          orient: "auto-start-reverse"
+        });
+        copyArrow.appendChild(svg("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: colors.copy }));
+        defs.appendChild(copyArrow);
+        graph.appendChild(defs);
+      }
+
+      function isCopyEdge(from, to) {
+        if (currentStage !== 5) {
+          return false;
+        }
+        return copyEdges.some(function (edge) {
+          return edge.from === from && edge.to === to;
+        });
+      }
+
+      function drawSplitBands() {
+        if (currentStage !== 5) {
+          return;
+        }
+        splits.forEach(function (split, i) {
+          var first = nodePositions[split.nodes[0]];
+          var last = nodePositions[split.nodes[split.nodes.length - 1]];
+          var fill = split.backend === "TT" ? "#f2f9f8" : "#f4f6f7";
+          var stroke = split.backend === "TT" ? "#b8dfdc" : "#ccd5d9";
+          var rect = svg("rect", {
+            x: "213",
+            y: String(first.y - 36),
+            width: "375",
+            height: String(last.y - first.y + 71),
+            rx: "6",
+            fill: fill,
+            stroke: stroke,
+            "stroke-dasharray": "4 3"
+          });
+          graph.appendChild(rect);
+          graph.appendChild(svg("text", {
+            x: "225",
+            y: String(first.y - 16),
+            fill: split.backend === "TT" ? colors.tt : colors.cpu,
+            "font-size": "11",
+            "font-weight": "700"
+          }, "S" + i + "  " + split.backend));
+        });
+      }
+
+      function drawEdges() {
+        sequentialEdges.forEach(function (edge) {
+          var from = nodePositions[edge[0]];
+          var to = nodePositions[edge[1]];
+          var copied = isCopyEdge(edge[0], edge[1]);
+          graph.appendChild(svg("path", {
+            d: "M " + from.x + " " + (from.y + 25) + " L " + to.x + " " + (to.y - 25),
+            fill: "none",
+            stroke: copied ? colors.copy : colors.edge,
+            "stroke-width": copied ? "2.3" : "1.6",
+            "stroke-dasharray": copied ? "5 3" : "",
+            "marker-end": copied ? "url(#copyArrow)" : "url(#arrow)"
+          }));
+          if (copied) {
+            drawCopyPill(to.x + 55, (from.y + to.y) / 2 - 10);
+          }
+        });
+
+        residualEdges.forEach(function (edge, index) {
+          var from = nodePositions[edge[0]];
+          var to = nodePositions[edge[1]];
+          var copied = isCopyEdge(edge[0], edge[1]);
+          var bend = index === 0 ? 126 : 151;
+          graph.appendChild(svg("path", {
+            d: "M " + (from.x - 115) + " " + from.y +
+              " C " + bend + " " + from.y + ", " + bend + " " + to.y + ", " +
+              (to.x - 115) + " " + to.y,
+            fill: "none",
+            stroke: copied ? colors.copy : "#a8b4b2",
+            "stroke-width": copied ? "2.3" : "1.5",
+            "stroke-dasharray": copied ? "5 3" : "4 4",
+            "marker-end": copied ? "url(#copyArrow)" : "url(#arrow)"
+          }));
+          graph.appendChild(svg("text", {
+            x: String(bend - 23),
+            y: String((from.y + to.y) / 2),
+            fill: copied ? colors.copy : colors.muted,
+            "font-size": "10"
+          }, copied ? "residual copy" : "residual"));
+        });
+      }
+
+      function drawCopyPill(x, y) {
+        graph.appendChild(svg("rect", {
+          x: String(x),
+          y: String(y),
+          width: "43",
+          height: "19",
+          rx: "4",
+          fill: colors.copyFill,
+          stroke: "#efcd9e"
+        }));
+        graph.appendChild(svg("text", {
+          x: String(x + 21.5),
+          y: String(y + 13),
+          fill: colors.copy,
+          "font-size": "10",
+          "font-weight": "700",
+          "text-anchor": "middle"
+        }, "COPY"));
+      }
+
+      function drawLeaf(node) {
+        var label = leafLabels[node.id];
+        if (!label) {
+          return;
+        }
+        var pos = nodePositions[node.id];
+        var isCpu = node.id === "x0";
+        var x = 615;
+        var w = 254;
+        graph.appendChild(svg("path", {
+          d: "M " + x + " " + pos.y + " L " + (pos.x + 116) + " " + pos.y,
+          fill: "none",
+          stroke: isCpu ? colors.cpu : colors.leaf,
+          "stroke-width": "1.4",
+          "stroke-dasharray": "3 3",
+          "marker-end": "url(#arrow)"
+        }));
+        graph.appendChild(svg("rect", {
+          x: String(x),
+          y: String(pos.y - 15),
+          width: String(w),
+          height: "30",
+          rx: "5",
+          fill: isCpu ? colors.cpuFill : colors.leafFill,
+          stroke: isCpu ? "#ccd5d9" : "#d4cff2"
+        }));
+        graph.appendChild(svg("text", {
+          x: String(x + 10),
+          y: String(pos.y + 4),
+          fill: isCpu ? colors.cpu : colors.leaf,
+          "font-size": "11",
+          "font-weight": "600"
+        }, label));
+      }
+
+      function nodePalette(backend) {
+        if (backend === "TT") {
+          return { fill: colors.ttFill, stroke: colors.tt, text: colors.tt };
+        }
+        if (backend === "CPU") {
+          return { fill: colors.cpuFill, stroke: colors.cpu, text: colors.cpu };
+        }
+        return { fill: colors.pending, stroke: colors.pendingStroke, text: colors.muted };
+      }
+
+      function drawNode(node) {
+        var pos = nodePositions[node.id];
+        var backend = backendFor(node.id);
+        var palette = nodePalette(backend);
+        var selected = selectedNode === node.id;
+        var group = svg("g", {
+          tabindex: "0",
+          role: "button",
+          "aria-label": node.label + " " + node.op,
+          style: "cursor:pointer"
+        });
+        group.appendChild(svg("rect", {
+          x: String(pos.x - 116),
+          y: String(pos.y - 25),
+          width: "232",
+          height: "50",
+          rx: "6",
+          fill: palette.fill,
+          stroke: selected ? colors.selected : palette.stroke,
+          "stroke-width": selected ? "2.2" : "1.3"
+        }));
+        group.appendChild(svg("text", {
+          x: String(pos.x - 101),
+          y: String(pos.y - 4),
+          fill: colors.ink,
+          "font-size": "13",
+          "font-weight": "650"
+        }, node.label));
+        group.appendChild(svg("text", {
+          x: String(pos.x - 101),
+          y: String(pos.y + 14),
+          fill: colors.muted,
+          "font-size": "11"
+        }, node.op));
+
+        var backendLabel = backend || "pending";
+        var pillWidth = backend ? 42 : 57;
+        group.appendChild(svg("rect", {
+          x: String(pos.x + 104 - pillWidth),
+          y: String(pos.y - 10),
+          width: String(pillWidth),
+          height: "21",
+          rx: "4",
+          fill: backend ? (backend === "TT" ? "#fff" : "#fff") : "#fff",
+          stroke: palette.stroke
+        }));
+        group.appendChild(svg("text", {
+          x: String(pos.x + 104 - pillWidth / 2),
+          y: String(pos.y + 4),
+          fill: palette.text,
+          "font-size": "10",
+          "font-weight": "700",
+          "text-anchor": "middle"
+        }, backendLabel));
+
+        group.addEventListener("click", function () {
+          selectedNode = node.id;
+          renderGraph();
+          renderNodeInfo();
+        });
+        group.addEventListener("keydown", function (event) {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            selectedNode = node.id;
+            renderGraph();
+            renderNodeInfo();
+          }
+        });
+        graph.appendChild(group);
+      }
+
+      function renderGraph() {
+        clear(graph);
+        nodePositions = {};
+        nodes.forEach(function (node, i) {
+          nodePositions[node.id] = { x: 400, y: 62 + i * 76 };
+        });
+        drawArrowMarker();
+        graph.appendChild(svg("text", {
+          x: "24",
+          y: "28",
+          fill: colors.muted,
+          "font-size": "11",
+          "font-weight": "600"
+        }, "Residual dependencies"));
+        graph.appendChild(svg("text", {
+          x: "615",
+          y: "28",
+          fill: colors.muted,
+          "font-size": "11",
+          "font-weight": "600"
+        }, "Pre-allocated leaf buffers"));
+        drawSplitBands();
+        drawEdges();
+        nodes.forEach(drawLeaf);
+        nodes.forEach(drawNode);
+      }
+
+      function renderPassInfo() {
+        var stage = stages[currentStage];
+        document.getElementById("passLabel").textContent = stage.label;
+        document.getElementById("passTitle").textContent = stage.title;
+        document.getElementById("passSummary").textContent = stage.summary;
+        document.getElementById("passRule").textContent = stage.rule;
+        clear(eventsEl);
+        stage.events.forEach(function (event) {
+          var row = document.createElement("div");
+          row.className = "event";
+          if (event.type) {
+            var mark = document.createElement("span");
+            mark.className = "mark " + event.type.toLowerCase();
+            mark.textContent = event.type;
+            row.appendChild(mark);
+          }
+          row.appendChild(document.createTextNode(event.text));
+          eventsEl.appendChild(row);
+        });
+      }
+
+      function renderNodeInfo() {
+        var node = nodes.filter(function (item) { return item.id === selectedNode; })[0];
+        var backend = backendFor(node.id) || "未分配";
+        nodeInfo.innerHTML = "";
+        var title = document.createElement("strong");
+        title.textContent = node.label + " / " + node.op;
+        nodeInfo.appendChild(title);
+        var list = document.createElement("dl");
+        [
+          ["src 输入", node.src],
+          ["可执行于", node.support],
+          ["当前分配", backend],
+          ["示例原因", currentStage === 0 ? "等待 scheduler assignment" : node.reason]
+        ].forEach(function (pair) {
+          var dt = document.createElement("dt");
+          dt.textContent = pair[0];
+          var dd = document.createElement("dd");
+          dd.textContent = pair[1];
+          list.appendChild(dt);
+          list.appendChild(dd);
+        });
+        nodeInfo.appendChild(list);
+      }
+
+      function renderSplits() {
+        clear(splitsEl);
+        if (currentStage !== 5) {
+          var empty = document.createElement("div");
+          empty.className = "empty-message";
+          empty.textContent = "进入 Pass 5 后显示连续 backend 段和需要跨 backend 搬运的输入。";
+          splitsEl.appendChild(empty);
+          return;
+        }
+        splits.forEach(function (split, i) {
+          var el = document.createElement("div");
+          el.className = "split " + split.backend.toLowerCase();
+          var title = document.createElement("strong");
+          title.textContent = "S" + i + " / " + split.backend;
+          el.appendChild(title);
+          el.appendChild(document.createTextNode(split.nodes.join("  ->  ")));
+          if (split.inputs.length) {
+            var input = document.createElement("div");
+            input.style.color = colors.copy;
+            input.style.marginTop = "4px";
+            input.textContent = "copy in: " + split.inputs.join(", ");
+            el.appendChild(input);
+          }
+          splitsEl.appendChild(el);
+        });
+      }
+
+      function render() {
+        setTabs();
+        renderGraph();
+        renderPassInfo();
+        renderNodeInfo();
+        renderSplits();
+      }
+
+      function stop() {
+        if (timer !== null) {
+          window.clearInterval(timer);
+          timer = null;
+          playButton.innerHTML = "&#9654;";
+          playButton.title = "自动播放";
+          playButton.setAttribute("aria-label", "自动播放");
+        }
+      }
+
+      function play() {
+        stop();
+        playButton.innerHTML = "&#10074;&#10074;";
+        playButton.title = "暂停";
+        playButton.setAttribute("aria-label", "暂停");
+        timer = window.setInterval(function () {
+          currentStage = (currentStage + 1) % stages.length;
+          render();
+        }, Number(speedControl.value));
+      }
+
+      document.getElementById("prevButton").addEventListener("click", function () {
+        stop();
+        currentStage = (currentStage + stages.length - 1) % stages.length;
+        render();
+      });
+
+      document.getElementById("nextButton").addEventListener("click", function () {
+        stop();
+        currentStage = (currentStage + 1) % stages.length;
+        render();
+      });
+
+      playButton.addEventListener("click", function () {
+        if (timer === null) {
+          play();
+        } else {
+          stop();
+        }
+      });
+
+      speedControl.addEventListener("input", function () {
+        if (timer !== null) {
+          play();
+        }
+      });
+
+      render();
+    }());
+  </script>
+</body>
+</html>

@@ -1,0 +1,1206 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TinyLLaMA + Tenstorrent 数据流转可视化</title>
+  <style>
+    :root {
+      --bg: #f5f7fa;
+      --panel: #ffffff;
+      --ink: #17202a;
+      --muted: #5d6b7c;
+      --line: #d7dee9;
+      --host: #2864a4;
+      --host-soft: #e8f1fb;
+      --graph: #6c4aa5;
+      --graph-soft: #f0ebfa;
+      --sched: #a35f00;
+      --sched-soft: #fff2da;
+      --tt: #0b6b74;
+      --tt-soft: #e4f5f6;
+      --cpu: #57606a;
+      --cpu-soft: #edf1f5;
+      --out: #1a7f64;
+      --out-soft: #e7f6f1;
+      --risk: #a45108;
+      --risk-soft: #fff2df;
+      --bad: #9d2335;
+      --bad-soft: #fde8ec;
+      --copy: #0f766e;
+      --copy-soft: #e1f5f2;
+      --shadow: 0 14px 32px rgba(20, 32, 48, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+      line-height: 1.55;
+    }
+
+    a {
+      color: var(--tt);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    button,
+    textarea,
+    input {
+      font: inherit;
+    }
+
+    .shell {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 410px;
+      gap: 22px;
+      align-items: start;
+      margin-bottom: 20px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(28px, 3vw, 42px);
+      line-height: 1.18;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 6px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      max-width: 940px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .panel,
+    .detail,
+    .column,
+    .source-panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .model-card {
+      padding: 16px;
+    }
+
+    .model-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .metric {
+      min-height: 74px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fafbfc;
+    }
+
+    .metric strong {
+      display: block;
+      color: var(--tt);
+      font-size: 24px;
+      line-height: 1.15;
+    }
+
+    .metric span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .input-panel {
+      padding: 18px;
+      margin-bottom: 20px;
+    }
+
+    .input-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    label {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 760;
+      margin-bottom: 6px;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 96px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      color: var(--ink);
+      background: #fbfcfe;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 14px;
+    }
+
+    .segmented,
+    .toggles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      min-height: 38px;
+      padding: 8px 13px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    button.active {
+      background: var(--tt);
+      border-color: var(--tt);
+      color: #fff;
+    }
+
+    .toggle {
+      display: inline-flex;
+      gap: 7px;
+      align-items: center;
+      min-height: 36px;
+      padding: 7px 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcfe;
+      color: var(--muted);
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .toggle input {
+      margin: 0;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .stat {
+      min-height: 68px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fafbfc;
+    }
+
+    .stat strong {
+      display: block;
+      color: var(--ink);
+      font-size: 19px;
+      line-height: 1.2;
+    }
+
+    .stat span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 410px;
+      gap: 20px;
+      align-items: start;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(150px, 1fr));
+      gap: 12px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+
+    .column {
+      min-width: 150px;
+      padding: 12px;
+      min-height: 680px;
+    }
+
+    .column-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 10px;
+      font-size: 13px;
+      font-weight: 780;
+      color: var(--muted);
+    }
+
+    .column-title span:last-child {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--line);
+    }
+
+    .column[data-lane="host"] .column-title span:last-child { background: var(--host); }
+    .column[data-lane="graph"] .column-title span:last-child { background: var(--graph); }
+    .column[data-lane="sched"] .column-title span:last-child { background: var(--sched); }
+    .column[data-lane="tt"] .column-title span:last-child { background: var(--tt); }
+    .column[data-lane="cpu"] .column-title span:last-child { background: var(--cpu); }
+    .column[data-lane="out"] .column-title span:last-child { background: var(--out); }
+
+    .node {
+      width: 100%;
+      display: block;
+      text-align: left;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 11px;
+      margin-bottom: 10px;
+      min-height: 108px;
+      transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
+    }
+
+    .node:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 18px rgba(20, 32, 48, 0.08);
+    }
+
+    .node.selected {
+      border-color: var(--tt);
+      box-shadow: 0 0 0 3px rgba(11, 107, 116, 0.14);
+    }
+
+    .node.related {
+      border-color: #97c4c8;
+      background: #fbffff;
+    }
+
+    .node.dimmed {
+      opacity: 0.42;
+    }
+
+    .node-title {
+      display: block;
+      font-weight: 760;
+      font-size: 14px;
+      line-height: 1.25;
+    }
+
+    .node-sub {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 10px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 730;
+      border: 1px solid var(--line);
+      background: #f2f5f9;
+      color: var(--muted);
+    }
+
+    .badge.host { background: var(--host-soft); color: var(--host); border-color: #c4d9f0; }
+    .badge.graph { background: var(--graph-soft); color: var(--graph); border-color: #d9ccef; }
+    .badge.sched { background: var(--sched-soft); color: var(--sched); border-color: #f1d6ad; }
+    .badge.tt { background: var(--tt-soft); color: var(--tt); border-color: #bbdedf; }
+    .badge.cpu { background: var(--cpu-soft); color: var(--cpu); border-color: #d8dee6; }
+    .badge.out { background: var(--out-soft); color: var(--out); border-color: #bfe5d2; }
+    .badge.copy { background: var(--copy-soft); color: var(--copy); border-color: #b6e2dc; }
+    .badge.fallback { background: var(--bad-soft); color: var(--bad); border-color: #f0bcc6; }
+    .badge.layout { background: var(--risk-soft); color: var(--risk); border-color: #f2cf9f; }
+
+    .node-meta {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .detail {
+      position: sticky;
+      top: 12px;
+      padding: 18px;
+      min-height: 680px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--tt);
+      background: var(--tt-soft);
+      border: 1px solid #bbdedf;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 13px;
+      font-weight: 740;
+    }
+
+    .detail-title {
+      margin: 12px 0 8px;
+      font-size: 24px;
+      line-height: 1.25;
+    }
+
+    .detail-summary {
+      margin: 0 0 14px;
+      color: var(--muted);
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .info {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fafbfc;
+      min-height: 98px;
+    }
+
+    .info p {
+      margin: 0;
+      font-size: 13px;
+    }
+
+    .info.full {
+      grid-column: 1 / -1;
+    }
+
+    .info.warn {
+      background: var(--risk-soft);
+      border-color: #f2cf9f;
+    }
+
+    .info.bad {
+      background: var(--bad-soft);
+      border-color: #f0bcc6;
+    }
+
+    code {
+      color: #26364a;
+      background: #edf2f7;
+      border: 1px solid #d8e1eb;
+      border-radius: 4px;
+      padding: 1px 4px;
+      font-family: Consolas, "SFMono-Regular", Menlo, monospace;
+      font-size: 0.95em;
+    }
+
+    .ledger {
+      margin-top: 20px;
+      padding: 18px;
+    }
+
+    .ledger-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .ledger-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fafbfc;
+      min-height: 114px;
+      font-size: 13px;
+    }
+
+    .ledger-item strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--ink);
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .source-panel {
+      margin-top: 20px;
+      padding: 18px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .source-panel ul {
+      margin: 8px 0 0;
+      padding-left: 20px;
+    }
+
+    @media (max-width: 1180px) {
+      header,
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .detail {
+        position: static;
+      }
+
+      .ledger-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 760px) {
+      .shell {
+        padding: 18px;
+      }
+
+      .input-grid,
+      .stats,
+      .detail-grid,
+      .ledger-grid,
+      .model-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .flow {
+        grid-template-columns: 1fr;
+        overflow-x: visible;
+      }
+
+      .column {
+        min-height: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <h1>TinyLLaMA + Tenstorrent 数据流转可视化</h1>
+        <p class="lead">
+          这张图把两个上下文输入 <code>ctx1</code> / <code>ctx2</code> 拆成具体数据对象：文本在哪里，token 在哪里，embedding 怎么进入 GGML graph，scheduler 如何把算子分配到 Metalium 或 CPU fallback，以及 Tenstorrent 的 tiled layout 为什么会引入额外 copy 和 materialization。
+        </p>
+      </div>
+
+      <aside class="panel model-card">
+        <h2>示例模型口径</h2>
+        <div class="model-grid">
+          <div class="metric"><strong>22</strong><span>TinyLLaMA decoder layers</span></div>
+          <div class="metric"><strong>2048</strong><span>hidden size / embedding width</span></div>
+          <div class="metric"><strong>32 / 4</strong><span>attention heads / KV heads</span></div>
+          <div class="metric"><strong>32000</strong><span>vocab size, logits width</span></div>
+        </div>
+      </aside>
+    </header>
+
+    <section class="panel input-panel">
+      <h2>输入：两个上下文进入同一次推理批次</h2>
+      <div class="input-grid">
+        <div>
+          <label for="ctx1">ctx1</label>
+          <textarea id="ctx1">The solution to Riemann hypothesis is</textarea>
+        </div>
+        <div>
+          <label for="ctx2">ctx2</label>
+          <textarea id="ctx2">Explain why tiled tensor layout matters for ASIC inference.</textarea>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="segmented" aria-label="推理阶段">
+          <button id="promptBtn" class="active" type="button">Prompt phase</button>
+          <button id="decodeBtn" type="button">Decode phase</button>
+        </div>
+        <div class="toggles" aria-label="显示选项">
+          <label class="toggle"><input id="storageToggle" type="checkbox" checked>显示存储位置</label>
+          <label class="toggle"><input id="fallbackToggle" type="checkbox" checked>突出 fallback</label>
+          <label class="toggle"><input id="layoutToggle" type="checkbox" checked>突出 layout 转换</label>
+        </div>
+      </div>
+
+      <div class="stats" id="stats"></div>
+      <div class="legend">
+        <span class="badge host">Host RAM</span>
+        <span class="badge graph">GGML graph</span>
+        <span class="badge sched">Scheduler</span>
+        <span class="badge tt">Metalium device</span>
+        <span class="badge cpu">CPU fallback</span>
+        <span class="badge copy">copy/sync</span>
+        <span class="badge layout">layout conversion</span>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <div>
+        <section class="flow" id="flow" aria-label="数据流转图"></section>
+      </div>
+
+      <aside class="detail" aria-live="polite">
+        <span class="eyebrow" id="detailLane"></span>
+        <h2 class="detail-title" id="detailTitle"></h2>
+        <p class="detail-summary" id="detailSummary"></p>
+        <div class="detail-grid">
+          <section class="info">
+            <h3>数据是什么</h3>
+            <p id="detailData"></p>
+          </section>
+          <section class="info">
+            <h3>shape / dtype</h3>
+            <p id="detailShape"></p>
+          </section>
+          <section class="info">
+            <h3>存在哪里</h3>
+            <p id="detailLocation"></p>
+          </section>
+          <section class="info">
+            <h3>layout</h3>
+            <p id="detailLayout"></p>
+          </section>
+          <section class="info full warn">
+            <h3>为什么要到下一层</h3>
+            <p id="detailNext"></p>
+          </section>
+          <section class="info full bad">
+            <h3>Tenstorrent 适配风险</h3>
+            <p id="detailRisk"></p>
+          </section>
+          <section class="info full">
+            <h3>关联接口 / 调试点</h3>
+            <p id="detailApi"></p>
+          </section>
+        </div>
+      </aside>
+    </section>
+
+    <section class="panel ledger">
+      <h2>当前阶段的数据账本</h2>
+      <div class="ledger-grid" id="ledger"></div>
+    </section>
+
+    <section class="source-panel">
+      <h2>资料来源与口径</h2>
+      <p>
+        本页是解释型可视化，不读取真实 GGUF，也不执行真实 tokenizer。TinyLLaMA 参数来自公开 config；Tenstorrent 路径按 Metalium backend 文档和 Martin Chang 的 GGML + Tenstorrent 记录做保守表达。
+      </p>
+      <ul>
+        <li><a href="https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0/blob/main/config.json">TinyLLaMA-1.1B-Chat-v1.0 config.json</a></li>
+        <li><a href="https://github.com/marty1885/llama.cpp/blob/metalium-support/docs/backend/Metalium.md">marty1885/llama.cpp Metalium backend 文档</a></li>
+        <li><a href="https://clehaxze.tw/gemlog/2024/10-28-generating-the-1st-token-on-tenstorrent-with-ggml.gmi">Getting the 1st token generated on Tenstorrent with GGML</a></li>
+      </ul>
+    </section>
+  </main>
+
+  <script>
+    const model = {
+      layers: 22,
+      hidden: 2048,
+      heads: 32,
+      kvHeads: 4,
+      headDim: 64,
+      vocab: 32000,
+      ffn: 5632
+    };
+
+    const lanes = [
+      { id: "host", title: "1. Host / llama.cpp" },
+      { id: "graph", title: "2. GGML graph" },
+      { id: "sched", title: "3. Scheduler" },
+      { id: "tt", title: "4. Metalium / TTNN" },
+      { id: "cpu", title: "5. CPU fallback" },
+      { id: "out", title: "6. Output" }
+    ];
+
+    const nodes = [
+      {
+        id: "text",
+        lane: "host",
+        title: "ctx1 / ctx2 文本",
+        sub: "业务输入仍是字符串",
+        badges: ["host"],
+        data: s => `ctx1=${s.ctx1Preview}; ctx2=${s.ctx2Preview}`,
+        shape: () => "2 段 UTF-8 text",
+        dtype: () => "string",
+        location: () => "Host RAM，由业务层和 llama.cpp 持有。",
+        layout: () => "无 tensor layout。",
+        summary: "用户输入还不是模型可以计算的数据。llama.cpp 首先要把文本交给模型词表对应的 tokenizer。",
+        next: "下一步必须得到 token id，否则无法索引 `token_embd.weight`，也无法构造 `llama_batch` 的 pos、seq_id 和 logits 标记。",
+        risk: "这里几乎没有 Tenstorrent 特有风险，但多上下文会影响后面的 batch 组织、KV cache 写入和输出选择。",
+        api: "`llama_tokenize`, `llama_vocab_*`, common tokenizer helpers"
+      },
+      {
+        id: "tokens",
+        lane: "host",
+        title: "示例 token ids",
+        sub: "tokenizer 输出 int32 id",
+        badges: ["host"],
+        data: s => `ctx1 tokens=${formatTokenList(s.ctx1Tokens)}; ctx2 tokens=${formatTokenList(s.ctx2Tokens)}`,
+        shape: s => `ctx1 [${s.ctx1Tokens.length}], ctx2 [${s.ctx2Tokens.length}]`,
+        dtype: () => "`llama_token` / int32",
+        location: () => "Host RAM，普通 CPU 数组。",
+        layout: () => "线性 token id 数组。",
+        summary: "token id 是 embedding lookup 的索引，也是 seq_id / position 跟踪的基础。本页 token id 是说明性 hash，不等于真实 TinyLLaMA tokenizer 输出。",
+        next: "下一步把两个上下文合并进 `llama_batch`，并为每个 token 标记所属 sequence 和 position。",
+        risk: "token id 本身不应上 Tenstorrent；它更适合作为 host/CPU 侧索引数据或特殊 row-major 例外。",
+        api: "`llama_tokenize`, `llama_batch_init`, `llama_batch_get_one`"
+      },
+      {
+        id: "batch",
+        lane: "host",
+        title: "llama_batch",
+        sub: "token / pos / seq_id / logits",
+        badges: ["host"],
+        data: s => s.phase === "prompt"
+          ? `n_tokens=${s.totalTokens}; seq_id=0/1; logits 只标记每个 ctx 的最后 token`
+          : "n_tokens=2; 每个 ctx 追加 1 个新 token，复用已有 KV cache",
+        shape: s => `token[${s.activeTokens}], pos[${s.activeTokens}], seq_id[${s.activeTokens}], logits[${s.activeTokens}]`,
+        dtype: () => "int32 token/pos, int8 logits flag",
+        location: () => "Host RAM，随后交给 `llama_decode(ctx, batch)`。",
+        layout: () => "结构化数组，不是 device tensor。",
+        summary: "`llama_batch` 是 llama.cpp 把多上下文请求交给模型执行图的入口。prompt 阶段 token 多，decode 阶段通常每个序列 1 个 token。",
+        next: "下一步进入模型 graph 构建，TinyLLaMA 的 embedding、attention、FFN、output projection 会被展开成 GGML op。",
+        risk: "多上下文时，KV cache 写入位置必须和 seq_id/pos 对齐；如果 fallback 后同步错误，后续 token 会发散。",
+        api: "`llama_decode`, `llama_batch`, `llama_kv_cache_*`"
+      },
+      {
+        id: "embedding",
+        lane: "graph",
+        title: "GET_ROWS(token_embd)",
+        sub: "token id -> embedding",
+        badges: ["graph", "fallback"],
+        fallback: true,
+        data: s => `按 token id 从 token_embd.weight 取行，得到 ${s.activeTokens} 个 hidden vector。`,
+        shape: s => `[${s.activeTokens}, ${model.hidden}]`,
+        dtype: () => "权重量化或 BF16/BFP16；activation 常转 BF16",
+        location: () => "案例化口径：GET_ROWS 先在 CPU fallback，或作为 Metalium row-major 特例逐步实现。",
+        layout: () => "GGML 侧 row-major；进入 TTNN 前需转 tiled tensor。",
+        summary: "embedding lookup 是 graph 的第一个张量化节点。Martin 的记录里 GET_ROWS 曾出现在 rejected op 列表中，因此这里把它标成高风险边界。",
+        next: "下一步得到 `inpL`，后续 layer 需要把这个 activation 送入 scheduler 判断是否上卡。",
+        risk: "embedding 是索引类操作，和矩阵乘不同。Tenstorrent backend 文档也把 indices、KV cache、embed weight 作为 row-major 例外方向。",
+        api: "`ggml_get_rows`, `GGML_OP_GET_ROWS`, `build_inp_embd(model.tok_embd)`"
+      },
+      {
+        id: "graph",
+        lane: "graph",
+        title: "TinyLLaMA graph",
+        sub: "22 层 decoder block",
+        badges: ["graph"],
+        data: s => `inpL -> 22 x {RMSNorm, QKV, ROPE, KV, attention, FFN} -> output。当前 active tokens=${s.activeTokens}。`,
+        shape: s => `activation [${s.activeTokens}, ${model.hidden}], FFN hidden ${model.ffn}`,
+        dtype: () => "GGML tensor dtype，依权重和 backend 转换而定",
+        location: () => "GGML graph metadata 在 Host；tensor buffer 可在 CPU 或 Metalium device。",
+        layout: () => "graph 只描述 op/shape/stride，不保证 device layout 一致。",
+        summary: "llama.cpp 在模型实现中构建 GGML cgraph。backend 不理解“TinyLLaMA”，只看到 GET_ROWS、MUL_MAT、ROPE、VIEW、SOFT_MAX 等 op。",
+        next: "下一步交给 GGML scheduler。它根据每个 tensor 的 buffer 和每个 backend 的 `supports_op` 决定执行位置。",
+        risk: "模型图包含大量 view/reshape/broadcast。对 row-major CPU 很自然，对 TTNN tiled tensor 可能需要 materialize。",
+        api: "`src/models/llama.cpp`, `ggml_build_forward_expand`, `ggml_cgraph`"
+      },
+      {
+        id: "support",
+        lane: "sched",
+        title: "supports_op 查询",
+        sub: "逐 op 判断能否上卡",
+        badges: ["sched"],
+        data: () => "按 op + dtype + shape + layout + buffer 位置判断：Metalium、CPU 或 fallback。",
+        shape: () => "能力矩阵，不是 tensor。",
+        dtype: () => "bool decision per op",
+        location: () => "Host RAM，scheduler 内部状态。",
+        layout: () => "读取 tensor layout/buffer 信息用于决策。",
+        summary: "`supports_op` 是正确性边界。声明过宽会把不支持的 VIEW/ROPE/broadcast 放到卡上，声明过窄会导致频繁 fallback。",
+        next: "下一步 scheduler 切 graph。只要某个节点不被 Metalium 支持，就会形成 CPU split 和跨 backend copy。",
+        risk: "Tenstorrent 早期缺口集中在 ROPE、MUL_MAT、GET_ROWS、SOFT_MAX、VIEW，以及 TTNN broadcast 规则差异。",
+        api: "`ggml_backend_dev_supports_op`, `ggml_backend_supports_op`, `GGML_METALIUM_PRINT_REJECTED_OPS`"
+      },
+      {
+        id: "split",
+        lane: "sched",
+        title: "graph split plan",
+        sub: "Metalium split + CPU split",
+        badges: ["sched", "copy"],
+        data: () => "案例化计划：embedding/KV/view/softmax 可能在 CPU；部分 matmul/elementwise 尝试进入 Metalium。",
+        shape: () => "split[CPU], split[Metalium], split[CPU], ...",
+        dtype: () => "调度元数据",
+        location: () => "Host RAM，`ggml_backend_sched` 中维护。",
+        layout: () => "split 边界需要显式 copy/layout conversion。",
+        summary: "scheduler 不执行 kernel，它把完整 graph 切成 backend 可执行的子图，并插入 copy/sync。",
+        next: "下一步把可上卡 activation 从 CPU row-major 转成 Metalium device buffer 的 TTNN tiled tensor。",
+        risk: "如果 split 太碎，每个 fallback 都可能带来 CPU <-> device copy 和 row-major <-> TILE_LAYOUT 转换，吞吐会被边界成本吃掉。",
+        api: "`ggml_backend_sched_split_graph`, `ggml_backend_sched_get_n_splits`, assignment logs"
+      },
+      {
+        id: "to_tt",
+        lane: "tt",
+        title: "copy + TILE_LAYOUT",
+        sub: "Host/CPU tensor -> TTNN tensor",
+        badges: ["tt", "copy", "layout"],
+        layoutMove: true,
+        data: s => `activation [${s.activeTokens}, ${model.hidden}] 从 row-major materialize 为 TTNN tiled tensor。`,
+        shape: s => `[${s.activeTokens}, ${model.hidden}]，tile 以 32x32 为基本组织`,
+        dtype: () => "BF16/BFP16 或 Tenstorrent native quant type",
+        location: () => "Metalium device buffer，由 TTNN tensor 管理。",
+        layout: () => "`TILE_LAYOUT`，不是 CPU 可按字节寻址的线性数组。",
+        summary: "这是 Tenstorrent 路径最关键的数据形态变化。GGML tensor 的 shape 看起来没变，但物理布局和访问方式已经变了。",
+        next: "下一步进入 Metalium backend 的 `graph_compute`，把 GGML op 映射到 TTNN op 或自定义 Metalium kernel。",
+        risk: "博客明确指出 Tenstorrent 不满足 CPU 可寻址、row-major、stride lazy view 等 GGML 常见假设。边界适配必须制造“看起来像 row-major”的错觉。",
+        api: "`ggml_backend_tensor_set`, `ggml_backend_buffer_type`, `ttnn.from_*`, `ttnn.TILE_LAYOUT`"
+      },
+      {
+        id: "tt_matmul",
+        lane: "tt",
+        title: "TTNN / Metalium matmul",
+        sub: "QKV / proj / FFN 候选",
+        badges: ["tt"],
+        data: s => `Layer 0 示例：Q/K/V matmul、attention output projection、FFN gate/up/down 的大矩阵乘。active tokens=${s.activeTokens}。`,
+        shape: s => `Q [${s.activeTokens}, ${model.heads}, ${model.headDim}], K/V [${s.activeTokens}, ${model.kvHeads}, ${model.headDim}]`,
+        dtype: () => "BF16/BFP16 或 BFLOAT8_B/BFLOAT4_B 等映射类型",
+        location: () => "Metalium device buffer。",
+        layout: () => "TTNN tiled tensor；matmul 可能走 TTNN operator 或 custom Metalium kernel。",
+        summary: "矩阵乘是最值得上卡的部分，也是新芯片适配最容易先展示价值的部分。",
+        next: "attention 还需要 ROPE、KV cache、mask、softmax、view/reshape。只做 matmul 不能完成完整 decoder block。",
+        risk: "Metalium 文档提到 `GGML_MUL_MAT` 的转置语义很特殊，可能需要缓存预转置权重或 custom kernel 来避免额外 transpose。",
+        api: "`GGML_OP_MUL_MAT`, `ttnn.matmul`, custom MUL_MAT kernel, `GGML_METALIUM_CACHE_MM_TRANSPOSE`"
+      },
+      {
+        id: "kv",
+        lane: "cpu",
+        title: "KV cache",
+        sub: "通过 -nkvo 留在 CPU",
+        badges: ["cpu", "fallback"],
+        fallback: true,
+        data: s => s.phase === "prompt"
+          ? `为 ctx1/ctx2 写入 prompt K/V；seq 长度约 ${s.ctx1Tokens.length} + ${s.ctx2Tokens.length}。`
+          : "读取已有 K/V，并为两个新 token 追加 K/V。",
+        shape: s => `[layers=${model.layers}, seq≈${s.kvTokens}, kv_heads=${model.kvHeads}, head_dim=${model.headDim}, K/V]`,
+        dtype: () => "通常为 F16/BF16/量化 KV 类型，按 llama.cpp 配置变化",
+        location: () => "CPU backend buffer / Host RAM。本案例按 Metalium 文档使用 `-nkvo`。",
+        layout: () => "CPU 可处理的 row-major / GGML stride 语义。",
+        summary: "KV cache 是 decode 性能和正确性的核心状态。Metalium 文档明确提示当前需要用 `-nkvo` 防止 KV cache 被 offload。",
+        next: "下一步 attention 需要把当前 Q 与历史 K/V 结合；如果 Q 在 TT device 而 KV 在 CPU，就会产生 fallback 或 copy 边界。",
+        risk: "KV cache 一旦位置、seq_id、pos 对不上，后续 token 会持续错误。多上下文时这个风险更明显。",
+        api: "`-nkvo`, `llama_kv_cache_*`, `build_attn_inp_kv`"
+      },
+      {
+        id: "fallback",
+        lane: "cpu",
+        title: "ROPE / VIEW / SOFT_MAX",
+        sub: "CPU fallback island",
+        badges: ["cpu", "fallback", "layout"],
+        fallback: true,
+        layoutMove: true,
+        data: () => "attention 中的 ROPE、mask、softmax、view/reshape/broadcast 在保守案例中回到 CPU 或需要 materialize。",
+        shape: s => `attention logits [${model.heads}, ${s.activeTokens}, kv_seq≈${s.kvTokens}]`,
+        dtype: () => "F32/BF16 中间值，按 op 和 backend 决定",
+        location: () => "CPU backend buffer；必要时从 Metalium device copy back。",
+        layout: () => "row-major / stride view；从 TILE_LAYOUT 回来时需要转换。",
+        summary: "这里是 TinyLLaMA + Tenstorrent 解释中最关键的“为什么不是加几行代码”。view/stride 在 CPU 上廉价，在 tiled tensor 上可能变成真实分配和 copy。",
+        next: "fallback 计算完如果后面还有可上卡 matmul，就要再次 copy 到 Metalium，并重新转成 tiled layout。",
+        risk: "Martin 的记录里 VIEW 是崩溃点，ROPE、MUL_MAT、GET_ROWS、SOFT_MAX 也在 rejected op 列表中。广播规则差异会让 supports_op 不能只按 op 名判断。",
+        api: "`GGML_OP_ROPE`, `GGML_OP_VIEW`, `GGML_OP_SOFT_MAX`, `GGML_METALIUM_PRINT_VIEW`"
+      },
+      {
+        id: "back_to_tt",
+        lane: "tt",
+        title: "fallback 后再上卡",
+        sub: "copy back + retile",
+        badges: ["tt", "copy", "layout"],
+        layoutMove: true,
+        data: s => `CPU 产出的 attention/FFN 输入再次转为 TTNN tiled tensor，继续跑可支持 matmul。`,
+        shape: s => `[${s.activeTokens}, ${model.hidden}]`,
+        dtype: () => "BF16/BFP16",
+        location: () => "Metalium device buffer。",
+        layout: () => "从 row-major 重新 materialize 到 `TILE_LAYOUT`。",
+        summary: "这一步展示混合执行的真实代价：fallback 不是只改一个调度标志，而是伴随数据位置和 layout 的来回变化。",
+        next: "下一步由 Metalium backend 的 `graph_compute` 执行子图，结束后把结果交还 scheduler。",
+        risk: "split 越碎，copy/retile 越频繁。早期只让 1 层上卡可能能跑通，但性能上可能更像 decelerator。",
+        api: "`ggml_backend_tensor_copy`, scheduler split inputs, layout bridge"
+      },
+      {
+        id: "compute",
+        lane: "tt",
+        title: "graph_compute",
+        sub: "执行 Metalium split",
+        badges: ["tt"],
+        data: () => "Metalium backend 遍历分配给自己的 GGML nodes，调用 TTNN op 或 custom Metalium kernel。",
+        shape: () => "subgraph nodes，不是单一 tensor。",
+        dtype: () => "按每个 node/tensor 决定",
+        location: () => "Host 调度，device 上执行。",
+        layout: () => "backend 内部尽量保持 TTNN tiled tensor，减少回到 row-major。",
+        summary: "`graph_compute` 是 GGML 抽象层进入芯片 runtime 的门。scheduler 已经切好图，真正的 kernel 调用从这里开始。",
+        next: "Metalium split 结束后，结果可能继续给 CPU fallback，也可能返回最终输出路径。",
+        risk: "TTNN 可能 JIT kernel，冷 cache 下 first token 时间较长；TTNN 不支持的 op 需要 custom kernel，否则数据必须回 CPU。",
+        api: "`ggml_backend_graph_compute`, `ggml_backend_i.graph_compute`, TTNN program cache"
+      },
+      {
+        id: "final",
+        lane: "out",
+        title: "final norm + logits",
+        sub: "输出投影到 vocab",
+        badges: ["out", "cpu"],
+        data: s => `对每个需要输出的位置计算 logits，宽度为 vocab=${model.vocab}。`,
+        shape: s => `[n_outputs=${s.outputs}, ${model.vocab}]`,
+        dtype: () => "F32 logits 返回采样器使用",
+        location: () => "通常需要回到 Host/CPU 可读内存。",
+        layout: () => "row-major logits 数组。",
+        summary: "最终输出是 logits，而不是 token。llama.cpp 根据 batch.logits 只保留需要输出的位置。",
+        next: "下一步采样器根据 logits 选择新 token，并把 token 追加到对应 ctx 的历史中。",
+        risk: "如果 logits 从 device 回 Host 的同步不完整，采样会读取旧数据或错位数据。",
+        api: "`llama_get_logits`, `llama_get_logits_ith`, `result_output`"
+      },
+      {
+        id: "sample",
+        lane: "out",
+        title: "sampler -> next token",
+        sub: "输出回业务层",
+        badges: ["out"],
+        data: s => `ctx1 next=${s.next1}; ctx2 next=${s.next2}`,
+        shape: () => "2 个 token id + detokenized pieces",
+        dtype: () => "`llama_token` + text piece",
+        location: () => "Host RAM，业务层可读。",
+        layout: () => "无 tensor layout。",
+        summary: "采样器把 logits 转成下一个 token。decode phase 会把这些 token 作为下一轮 `llama_batch` 输入。",
+        next: "如果继续生成，流程回到 `llama_batch`，但 active token 变为每个 ctx 1 个，同时 KV cache 继续增长。",
+        risk: "推理链路中任何一次 fallback/copy/layout 错误都可能在这里表现为语义发散，而不一定立即崩溃。",
+        api: "`llama_sampler_sample`, `llama_sampler_accept`, `llama_token_to_piece`"
+      }
+    ];
+
+    const edges = {
+      text: ["tokens"],
+      tokens: ["batch"],
+      batch: ["embedding"],
+      embedding: ["graph"],
+      graph: ["support"],
+      support: ["split"],
+      split: ["to_tt", "kv", "fallback"],
+      to_tt: ["tt_matmul"],
+      tt_matmul: ["kv", "fallback"],
+      kv: ["fallback"],
+      fallback: ["back_to_tt", "final"],
+      back_to_tt: ["compute"],
+      compute: ["final"],
+      final: ["sample"],
+      sample: ["batch"]
+    };
+
+    const reverseEdges = {};
+    Object.entries(edges).forEach(([from, tos]) => {
+      tos.forEach((to) => {
+        reverseEdges[to] = reverseEdges[to] || [];
+        reverseEdges[to].push(from);
+      });
+    });
+
+    const laneNames = {
+      host: "Host / llama.cpp",
+      graph: "GGML graph",
+      sched: "GGML scheduler",
+      tt: "Metalium / TTNN",
+      cpu: "CPU fallback",
+      out: "Output"
+    };
+
+    let selectedId = "batch";
+    let phase = "prompt";
+
+    const flow = document.getElementById("flow");
+    const stats = document.getElementById("stats");
+    const ledger = document.getElementById("ledger");
+    const promptBtn = document.getElementById("promptBtn");
+    const decodeBtn = document.getElementById("decodeBtn");
+    const storageToggle = document.getElementById("storageToggle");
+    const fallbackToggle = document.getElementById("fallbackToggle");
+    const layoutToggle = document.getElementById("layoutToggle");
+    const ctx1 = document.getElementById("ctx1");
+    const ctx2 = document.getElementById("ctx2");
+
+    function hashToken(text) {
+      let hash = 2166136261;
+      for (let i = 0; i < text.length; i++) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      return 3 + (Math.abs(hash) % 31990);
+    }
+
+    function tokenize(text) {
+      const pieces = text.match(/[\u4e00-\u9fff]|[A-Za-z0-9_]+|[^\sA-Za-z0-9_\u4e00-\u9fff]/g) || [];
+      const ids = [1].concat(pieces.map(hashToken));
+      return ids.slice(0, 32);
+    }
+
+    function summarizeText(text) {
+      const trimmed = text.replace(/\s+/g, " ").trim();
+      if (!trimmed) {
+        return "(empty)";
+      }
+      return trimmed.length > 42 ? `${trimmed.slice(0, 42)}...` : trimmed;
+    }
+
+    function formatTokenList(tokens) {
+      const head = tokens.slice(0, 8).join(", ");
+      return tokens.length > 8 ? `[${head}, ...]` : `[${head}]`;
+    }
+
+    function getState() {
+      const ctx1Tokens = tokenize(ctx1.value);
+      const ctx2Tokens = tokenize(ctx2.value);
+      const totalTokens = ctx1Tokens.length + ctx2Tokens.length;
+      const activeTokens = phase === "prompt" ? totalTokens : 2;
+      const outputs = 2;
+      return {
+        phase,
+        ctx1Tokens,
+        ctx2Tokens,
+        totalTokens,
+        activeTokens,
+        outputs,
+        kvTokens: phase === "prompt" ? totalTokens : totalTokens + 2,
+        ctx1Preview: summarizeText(ctx1.value),
+        ctx2Preview: summarizeText(ctx2.value),
+        next1: `id ${hashToken(" therefore")}`,
+        next2: `id ${hashToken(" because")}`
+      };
+    }
+
+    function valueOf(value, state) {
+      return typeof value === "function" ? value(state) : value;
+    }
+
+    function relatedIds(id) {
+      const related = new Set([id]);
+      (edges[id] || []).forEach((to) => related.add(to));
+      (reverseEdges[id] || []).forEach((from) => related.add(from));
+      return related;
+    }
+
+    function renderStats(state) {
+      const phaseText = state.phase === "prompt" ? "Prompt phase" : "Decode phase";
+      stats.innerHTML = `
+        <div class="stat"><strong>${phaseText}</strong><span>当前演示阶段</span></div>
+        <div class="stat"><strong>${state.activeTokens}</strong><span>本轮 active tokens</span></div>
+        <div class="stat"><strong>${state.kvTokens}</strong><span>KV cache 可见 token 数</span></div>
+        <div class="stat"><strong>${state.outputs} x ${model.vocab}</strong><span>最终 logits 形状</span></div>
+      `;
+    }
+
+    function renderFlow(state) {
+      const related = relatedIds(selectedId);
+      flow.innerHTML = "";
+
+      lanes.forEach((lane) => {
+        const column = document.createElement("section");
+        column.className = "column";
+        column.dataset.lane = lane.id;
+        column.innerHTML = `<div class="column-title"><span>${lane.title}</span><span></span></div>`;
+
+        nodes.filter((node) => node.lane === lane.id).forEach((node) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "node";
+          if (node.id === selectedId) button.classList.add("selected");
+          if (related.has(node.id) && node.id !== selectedId) button.classList.add("related");
+          if (!fallbackToggle.checked && node.fallback) button.classList.add("dimmed");
+          if (!layoutToggle.checked && node.layoutMove) button.classList.add("dimmed");
+
+          const badges = node.badges.map((badge) => `<span class="badge ${badge}">${badgeLabel(badge)}</span>`).join("");
+          const meta = storageToggle.checked
+            ? `<span class="node-meta">${stripCode(valueOf(node.location, state))}</span>`
+            : "";
+          button.innerHTML = `
+            <span class="node-title">${node.title}</span>
+            <span class="node-sub">${node.sub}</span>
+            <span class="badges">${badges}</span>
+            ${meta}
+          `;
+          button.addEventListener("click", () => {
+            selectedId = node.id;
+            render();
+          });
+          column.appendChild(button);
+        });
+
+        flow.appendChild(column);
+      });
+    }
+
+    function badgeLabel(badge) {
+      return {
+        host: "Host",
+        graph: "Graph",
+        sched: "Sched",
+        tt: "TT",
+        cpu: "CPU",
+        out: "Out",
+        copy: "Copy",
+        fallback: "Fallback",
+        layout: "Layout"
+      }[badge] || badge;
+    }
+
+    function stripCode(text) {
+      return String(text).replace(/`/g, "");
+    }
+
+    function escapeHtml(text) {
+      return String(text)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function withCode(text) {
+      return escapeHtml(text).replace(/`([^`]+)`/g, "<code>$1</code>");
+    }
+
+    function renderDetail(state) {
+      const node = nodes.find((item) => item.id === selectedId);
+      document.getElementById("detailLane").textContent = laneNames[node.lane];
+      document.getElementById("detailTitle").textContent = node.title;
+      document.getElementById("detailSummary").innerHTML = withCode(valueOf(node.summary, state));
+      document.getElementById("detailData").innerHTML = withCode(valueOf(node.data, state));
+      document.getElementById("detailShape").innerHTML = withCode(`${valueOf(node.shape, state)}; ${valueOf(node.dtype, state)}`);
+      document.getElementById("detailLocation").innerHTML = withCode(valueOf(node.location, state));
+      document.getElementById("detailLayout").innerHTML = withCode(valueOf(node.layout, state));
+      document.getElementById("detailNext").innerHTML = withCode(valueOf(node.next, state));
+      document.getElementById("detailRisk").innerHTML = withCode(valueOf(node.risk, state));
+      document.getElementById("detailApi").innerHTML = withCode(valueOf(node.api, state));
+    }
+
+    function renderLedger(state) {
+      const items = [
+        {
+          title: "Host request",
+          text: `ctx1 tokens=${state.ctx1Tokens.length}, ctx2 tokens=${state.ctx2Tokens.length}; text 和 token id 都在 Host RAM。`
+        },
+        {
+          title: "llama_batch",
+          text: `本轮 active tokens=${state.activeTokens}; prompt 阶段批量处理，decode 阶段每个 ctx 追加 1 个 token。`
+        },
+        {
+          title: "GGML activation",
+          text: `embedding / hidden state 逻辑形状为 [${state.activeTokens}, ${model.hidden}]，位置由 scheduler 决定。`
+        },
+        {
+          title: "Metalium tensor",
+          text: "上卡后变成 TTNN tiled tensor；shape 看似相同，物理布局和访问方式不同。"
+        },
+        {
+          title: "CPU state",
+          text: `KV cache 按 -nkvo 留在 CPU；当前可见 token 约 ${state.kvTokens}，fallback 也在 CPU buffer。`
+        }
+      ];
+
+      ledger.innerHTML = items.map((item) => `
+        <div class="ledger-item">
+          <strong>${item.title}</strong>
+          <span>${item.text}</span>
+        </div>
+      `).join("");
+    }
+
+    function render() {
+      const state = getState();
+      renderStats(state);
+      renderFlow(state);
+      renderDetail(state);
+      renderLedger(state);
+      promptBtn.classList.toggle("active", phase === "prompt");
+      decodeBtn.classList.toggle("active", phase === "decode");
+    }
+
+    promptBtn.addEventListener("click", () => {
+      phase = "prompt";
+      render();
+    });
+
+    decodeBtn.addEventListener("click", () => {
+      phase = "decode";
+      render();
+    });
+
+    [ctx1, ctx2, storageToggle, fallbackToggle, layoutToggle].forEach((element) => {
+      element.addEventListener("input", render);
+      element.addEventListener("change", render);
+    });
+
+    render();
+  </script>
+</body>
+</html>

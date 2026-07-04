@@ -1,0 +1,907 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tenstorrent 适配 llama.cpp / GGML 的执行链路与难点</title>
+  <style>
+    :root {
+      --bg: #f5f7fa;
+      --panel: #ffffff;
+      --ink: #17202a;
+      --muted: #5d6b7c;
+      --line: #d7dee9;
+      --active: #0b6b74;
+      --active-soft: #e4f5f6;
+      --risk: #a45108;
+      --risk-soft: #fff2df;
+      --ok: #1c7c54;
+      --ok-soft: #e6f6ee;
+      --hard: #9d2335;
+      --hard-soft: #fde8ec;
+      --code: #26364a;
+      --shadow: 0 14px 32px rgba(20, 32, 48, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+      line-height: 1.55;
+    }
+
+    a {
+      color: var(--active);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .shell {
+      max-width: 1320px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 22px;
+      align-items: start;
+      margin-bottom: 20px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(27px, 3vw, 40px);
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      max-width: 880px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .meta-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .meta-card h2 {
+      margin: 0 0 10px;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .metric {
+      min-height: 74px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fafbfc;
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 22px;
+      line-height: 1.15;
+      color: var(--active);
+    }
+
+    .metric span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin: 22px 0;
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      min-height: 38px;
+      padding: 8px 14px;
+      border-radius: 6px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button.primary {
+      background: var(--active);
+      border-color: var(--active);
+      color: #fff;
+    }
+
+    button:disabled {
+      opacity: 0.42;
+      cursor: not-allowed;
+    }
+
+    .progress {
+      flex: 1 1 280px;
+      min-width: 220px;
+      height: 12px;
+      border-radius: 999px;
+      background: #e4e9f1;
+      overflow: hidden;
+      border: 1px solid #d5dce7;
+    }
+
+    .progress span {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: linear-gradient(90deg, #0b6b74, #2b8a55);
+      transition: width 180ms ease;
+    }
+
+    .progress-label {
+      color: var(--muted);
+      min-width: 220px;
+      font-size: 14px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 390px minmax(0, 1fr);
+      gap: 20px;
+      align-items: start;
+    }
+
+    .flow,
+    .detail,
+    .summary,
+    .source-panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .flow {
+      padding: 12px;
+      position: sticky;
+      top: 12px;
+    }
+
+    .stage {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 28px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      text-align: left;
+      border: 1px solid transparent;
+      background: transparent;
+      padding: 10px;
+      border-radius: 8px;
+      min-height: 58px;
+    }
+
+    .stage + .stage {
+      margin-top: 6px;
+    }
+
+    .stage .num {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: #eef2f7;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .stage .name {
+      display: block;
+      font-weight: 700;
+      line-height: 1.25;
+    }
+
+    .stage .note {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .stage .risk {
+      padding: 3px 7px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      background: var(--risk-soft);
+      color: var(--risk);
+      white-space: nowrap;
+    }
+
+    .stage.active {
+      border-color: var(--active);
+      background: var(--active-soft);
+    }
+
+    .stage.active .num {
+      background: var(--active);
+      color: #fff;
+    }
+
+    .stage.done .num {
+      background: var(--ok);
+      color: #fff;
+    }
+
+    .detail {
+      min-height: 650px;
+      padding: 22px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--active);
+      background: var(--active-soft);
+      border: 1px solid #bbdedf;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    h2 {
+      margin: 14px 0 8px;
+      font-size: clamp(22px, 2vw, 30px);
+      letter-spacing: 0;
+    }
+
+    .summary-text {
+      margin: 0 0 18px;
+      max-width: 900px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .section-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .info {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: #fafbfc;
+      min-height: 120px;
+    }
+
+    .info h3 {
+      margin: 0 0 6px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    .info p {
+      margin: 0;
+      font-size: 14px;
+    }
+
+    .info.risk-box {
+      background: var(--hard-soft);
+      border-color: #f3c0c8;
+    }
+
+    .info.work-box {
+      background: var(--risk-soft);
+      border-color: #f5d4a8;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: #eef2f7;
+      color: var(--code);
+      border: 1px solid #d9e0ea;
+      font-size: 13px;
+      font-family: Consolas, "SFMono-Regular", Menlo, monospace;
+    }
+
+    .impact {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: 170px minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: #fbfcfe;
+    }
+
+    .impact strong {
+      display: block;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .bar {
+      position: relative;
+      height: 18px;
+      border-radius: 999px;
+      background: #e5eaf2;
+      overflow: hidden;
+    }
+
+    .bar span {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: linear-gradient(90deg, #2b8a55, #d48b18, #9d2335);
+      transition: width 180ms ease;
+    }
+
+    .summary {
+      margin-top: 20px;
+      padding: 18px;
+    }
+
+    .summary h2,
+    .source-panel h2 {
+      margin: 0 0 12px;
+      font-size: 18px;
+    }
+
+    .risk-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .risk-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: #fafbfc;
+    }
+
+    .risk-card strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 15px;
+    }
+
+    .risk-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .trace {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .trace div {
+      min-height: 72px;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #ffffff;
+      font-size: 13px;
+    }
+
+    .trace strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--code);
+    }
+
+    .source-panel {
+      margin-top: 20px;
+      padding: 18px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .source-panel ul {
+      margin: 8px 0 0;
+      padding-left: 20px;
+    }
+
+    code {
+      color: var(--code);
+      background: #edf2f7;
+      border: 1px solid #d8e1eb;
+      border-radius: 4px;
+      padding: 1px 4px;
+      font-family: Consolas, "SFMono-Regular", Menlo, monospace;
+      font-size: 0.95em;
+    }
+
+    @media (max-width: 1040px) {
+      header,
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .flow {
+        position: static;
+      }
+
+      .section-grid,
+      .risk-grid,
+      .trace {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 640px) {
+      .shell {
+        padding: 18px;
+      }
+
+      .section-grid,
+      .risk-grid,
+      .trace,
+      .meta-grid,
+      .impact {
+        grid-template-columns: 1fr;
+      }
+
+      .progress-label {
+        min-width: 0;
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <h1>Tenstorrent 适配 llama.cpp / GGML：执行链路与难点演示</h1>
+        <p class="lead">
+          这份演示延续上一张“Host 输入到芯片执行”的流程图，但把每一层都换成 Tenstorrent / Metalium / TTNN 的现实约束。它的重点不是复述接口清单，而是说明为什么新芯片适配会从“注册 backend”迅速扩展到内存布局、算子覆盖、调度边界、运行时稳定性和长期维护。
+        </p>
+      </div>
+
+      <aside class="meta-card">
+        <h2>当前开源线索</h2>
+        <div class="meta-grid">
+          <div class="metric">
+            <strong>449</strong>
+            <span>GitHub compare 显示相对主线的提交规模</span>
+          </div>
+          <div class="metric">
+            <strong>54</strong>
+            <span>GitHub compare 显示涉及文件数量</span>
+          </div>
+          <div class="metric">
+            <strong>1</strong>
+            <span>文档声明当前一次只暴露一个设备</span>
+          </div>
+          <div class="metric">
+            <strong>-nkvo</strong>
+            <span>KV cache 需要保留在 CPU</span>
+          </div>
+        </div>
+      </aside>
+    </header>
+
+    <section class="toolbar" aria-label="演示控制">
+      <button id="prevBtn">上一步</button>
+      <button id="nextBtn" class="primary">下一步</button>
+      <button id="resetBtn">重置</button>
+      <div class="progress" aria-hidden="true"><span id="progressBar"></span></div>
+      <div class="progress-label">
+        <span id="progressText">1 / 12</span> ·
+        <span id="progressName">Host 输入与 offload 策略</span>
+      </div>
+    </section>
+
+    <section class="layout">
+      <nav class="flow" id="flow" aria-label="适配流程"></nav>
+
+      <article class="detail" aria-live="polite">
+        <span class="eyebrow" id="stepEyebrow">Step 1 / 12</span>
+        <h2 id="stepTitle"></h2>
+        <p class="summary-text" id="stepSummary"></p>
+
+        <div class="section-grid">
+          <section class="info">
+            <h3>原流程这一层要解决什么</h3>
+            <p id="purpose"></p>
+          </section>
+          <section class="info risk-box">
+            <h3>Tenstorrent 案例暴露的难点</h3>
+            <p id="difficulty"></p>
+          </section>
+          <section class="info">
+            <h3>为什么必须进入下一步</h3>
+            <p id="whyNext"></p>
+          </section>
+          <section class="info work-box">
+            <h3>对工作量的含义</h3>
+            <p id="workload"></p>
+          </section>
+          <section class="info">
+            <h3>前置依赖</h3>
+            <p id="depends"></p>
+          </section>
+          <section class="info">
+            <h3>验证方式</h3>
+            <p id="verify"></p>
+          </section>
+        </div>
+
+        <div class="impact">
+          <strong>复杂度指示</strong>
+          <div class="bar"><span id="difficultyBar"></span></div>
+        </div>
+
+        <div class="chips" id="chips"></div>
+      </article>
+    </section>
+
+    <section class="summary">
+      <h2>管理层可以带走的结论</h2>
+      <div class="risk-grid">
+        <div class="risk-card">
+          <strong>接入层不是主要工作量</strong>
+          <p>注册 backend、接 CMake、暴露 device API 是入口。真正的工作在接口背后的内存和算子语义。</p>
+        </div>
+        <div class="risk-card">
+          <strong>布局不一致会放大成本</strong>
+          <p>GGML 常按 row-major、stride、CPU 可寻址来理解 tensor；Tenstorrent 侧以 tiled tensor 为核心，这会影响 copy、view、fallback 和调度。</p>
+        </div>
+        <div class="risk-card">
+          <strong>算子覆盖决定能否稳定推理</strong>
+          <p>只让第一层跑起来是里程碑，但要支撑真实模型，需要 ROPE、MUL_MAT、GET_ROWS、SOFT_MAX、VIEW、broadcast、KV cache 等链条一起成立。</p>
+        </div>
+        <div class="risk-card">
+          <strong>生产化还包括维护成本</strong>
+          <p>TTNN/Metalium 版本、JIT 冷启动、多卡 mesh、精度转换、上游接口变化都会持续消耗工程资源。</p>
+        </div>
+      </div>
+
+      <div class="trace" aria-label="Tenstorrent 数据形态变化">
+        <div><strong>Host</strong>tokens、batch、prompt、KV 状态仍由 CPU 组织。</div>
+        <div><strong>GGML Graph</strong>算子节点看起来是通用 tensor 运算。</div>
+        <div><strong>Scheduler</strong>依据 backend 能力切分 CPU / Metalium 子图。</div>
+        <div><strong>Layout Bridge</strong>row-major tensor 需要转换成 TTNN tile layout。</div>
+        <div><strong>TTNN / Metalium</strong>优先调 TTNN op，缺口用 Metalium kernel 兜底。</div>
+        <div><strong>Output</strong>结果回到 GGML / llama.cpp，必要时再转回 CPU 可读格式。</div>
+      </div>
+    </section>
+
+    <section class="source-panel">
+      <h2>资料来源与口径</h2>
+      <p>
+        本页按 2026-04-29 的公开资料整理。`metalium-support` 分支 head 由 `git ls-remote` 确认为
+        <code>571bb045196bea904a438507a96b21eab96a8cca</code>。GitHub compare 页面显示当前差异规模为 2 位贡献者、449 个 commits、54 个 changed files；这个数字会随着上游 master 与个人分支变化而变化。
+      </p>
+      <ul>
+        <li><a href="https://clehaxze.tw/gemlog/2024/10-28-generating-the-1st-token-on-tenstorrent-with-ggml.gmi">Martin Chang 的 Tenstorrent + GGML 首 token 记录</a></li>
+        <li><a href="https://github.com/marty1885/llama.cpp/tree/metalium-support">marty1885/llama.cpp 的 metalium-support 分支</a></li>
+        <li><a href="https://github.com/marty1885/llama.cpp/blob/metalium-support/docs/backend/Metalium.md">Metalium backend 文档</a></li>
+        <li><a href="https://github.com/ggml-org/llama.cpp/compare/master...marty1885%3Allama.cpp%3Ametalium-support">相对 ggml-org/master 的 compare 页面</a></li>
+        <li><a href="https://github.com/ggml-org/llama.cpp/discussions/10858">llama.cpp 关于 Tenstorrent Grayskull / Wormhole 支持的讨论</a></li>
+      </ul>
+    </section>
+  </main>
+
+  <script>
+    const steps = [
+      {
+        name: "Host 输入与 offload 策略",
+        note: "CPU 仍负责请求组织",
+        risk: "中",
+        title: "1. Host 输入：先决定哪些层能上卡",
+        summary: "Tenstorrent 在 llama.cpp 中被当作 GPU offload 目标使用，典型命令通过 `-ngl` 指定上卡层数，同时因为 KV cache 受限，需要用 `-nkvo` 留在 CPU。",
+        purpose: "把业务请求、prompt token、batch、sequence、KV cache 状态交给 llama.cpp，并决定本轮推理中哪些 layer 尝试交给新 backend。",
+        difficulty: "早期适配并不是全模型上卡。博客记录里最初只有 TinyLLaMA 1.1B 的单层跑在 Tenstorrent，其余仍在 CPU；官方文档也提示 KV cache 需要留在 CPU。",
+        whyNext: "如果只停留在命令参数层，GGML 并不知道新设备能执行什么。下一步必须把 backend 注册进 GGML，让 scheduler 能发现设备。",
+        workload: "这是演示最容易讲清楚的一层，但不是主要研发成本。它暴露的是混合执行需求：CPU、Tenstorrent、KV cache、fallback 必须一起设计。",
+        depends: "需要 llama.cpp 的 layer offload 机制、GGML backend registry、Tenstorrent runtime 环境变量可用。",
+        verify: "能在 `llama-cli` 中看到设备被发现，`-ngl` 生效，且加 `-nkvo` 后不再把 KV cache 误放到 Metalium buffer。",
+        chips: ["llama-cli", "-ngl", "-nkvo", "GGML_METALIUM_DEVICE_ID"],
+        score: 48
+      },
+      {
+        name: "Backend 注册与构建",
+        note: "让 GGML 看见设备",
+        risk: "中",
+        title: "2. Backend 注册：从几行入口进入完整工程",
+        summary: "抽象步骤里第一项是 `ggml_backend_XXX_reg`、注册表和构建系统。Tenstorrent 案例说明，这一步很快会被 TTNN / Metalium 的编译、安装和运行时变量放大。",
+        purpose: "把 Metalium backend 编译进 llama.cpp，并向 GGML 注册 backend registry，让 `ggml_backend_reg` 能返回对应设备与后端接口。",
+        difficulty: "Metalium 文档没有固定的受支持 TTNN 版本，要求构建最新 Metalium/TTNN 并让 llama.cpp 找到 runtime。依赖本身是 moving target。",
+        whyNext: "注册只解决“能被发现”。真正执行前还要为每个设备返回 device API，说明设备数量、buffer 类型、copy 能力和能力查询。",
+        workload: "接入代码可能不长，但构建矩阵、SDK 版本、驱动、环境变量和 CI 复现会形成长期维护成本。",
+        depends: "需要 TT_METAL_HOME、TT_METAL_RUNTIME_ROOT、GGML_METALIUM=ON、CMake/Ninja/GCC 或 Clang 工具链。",
+        verify: "从干净机器构建一次，确认缺依赖时错误明确，依赖齐全时 backend 被 `ggml_backend_registry` 枚举出来。",
+        chips: ["ggml_backend_metalium_reg", "GGML_METALIUM=ON", "TT_METAL_HOME", "TT_METAL_RUNTIME_ROOT"],
+        score: 55
+      },
+      {
+        name: "Device API 与多卡边界",
+        note: "单设备先跑通",
+        risk: "高",
+        title: "3. Device API：多卡不是简单枚举几张卡",
+        summary: "Metalium 文档声明当前只暴露一个设备，多设备扩展预计走 TTNN native scaling，并通过 mesh shape 方向演进。",
+        purpose: "对 GGML 返回设备对象，暴露 device name、memory/buffer 类型、copy 能力、supports_op 能力和初始化 backend 的方法。",
+        difficulty: "Tenstorrent 的多芯片扩展更接近 mesh/cluster 语义，而不是 llama.cpp 简单把 layer 平铺到多张 GPU。文档里的 `GGML_METALIUM_MESH_SHAPE` 也标注为早期开发用途。",
+        whyNext: "设备对象建立后，下一层必须解决 tensor 实际放在哪里以及怎么被访问。没有 buffer 抽象，device API 只是空壳。",
+        workload: "单卡可以先交付演示，多卡需要 runtime、调度、通信、内存切分策略共同成熟，不宜在第一阶段承诺。",
+        depends: "依赖 TTNN/Metalium 能表达设备、mesh、device id，并且 GGML 的 scheduler 能识别 backend buffer type。",
+        verify: "单设备路径可以稳定初始化；设置 device id 或 mesh shape 时行为可解释；未支持的组合要明确报错。",
+        chips: ["ggml_backend_device", "GGML_METALIUM_DEVICE_ID", "GGML_METALIUM_MESH_SHAPE", "TTNN mesh"],
+        score: 76
+      },
+      {
+        name: "Buffer 与内存模型",
+        note: "CPU 不能直接寻址",
+        risk: "高",
+        title: "4. Buffer：GGML 的常见假设在 ASIC 上不成立",
+        summary: "博客明确指出 Tenstorrent card 没有 CPU 直接访问能力，也不是退化成 row-major 的布局。也就是说，`tensor->data` 不能简单理解为 CPU 能读写的线性指针。",
+        purpose: "为 GGML tensor 绑定 backend-specific storage，并实现 alloc、free、copy、get/set tensor 等基础内存操作。",
+        difficulty: "GGML 历史上很多路径天然假设 tensor 可寻址、按字节访问、row-major 或 stride 可描述。Tenstorrent 的设备内存和 tile layout 打破这些假设。",
+        whyNext: "只有 buffer 能存住 tensor 还不够。输入、权重和中间结果必须在 Host row-major 与 TTNN tile layout 之间转换。",
+        workload: "这是适配从“接口工程”变成“体系结构工程”的分界点。layout bridge 做不好，后面的算子支持越多，隐藏 bug 越多。",
+        depends: "需要 GGML buffer type、TTNN tensor 管理、host-device copy、layout metadata、生命周期绑定策略。",
+        verify: "用小 tensor 做 set/get round trip；验证非连续、不同 dtype、跨 backend copy 的正确性和内存释放。",
+        chips: ["ggml_backend_buffer_type", "ggml_backend_tensor_set", "ggml_backend_tensor_get", "TTNN tensor"],
+        score: 84
+      },
+      {
+        name: "Layout Bridge",
+        note: "row-major 到 tile",
+        risk: "高",
+        title: "5. Layout Bridge：32x32 tile 是核心难点",
+        summary: "TTNN 示例使用 `TILE_LAYOUT`，博客说明 tile 是 32x32 矩阵。它能减少设备 DRAM 访问，但会让 GGML 与其他 backend 的 row-major 约定失效。",
+        purpose: "在 tensor 进入 Tenstorrent backend 时，把 GGML 侧形状、stride、dtype 映射成 TTNN 可执行的 tiled tensor。",
+        difficulty: "如果 CPU backend、GGML scheduler、Metalium backend 都假设对方讲 row-major，就必须做一层“看起来像 row-major”的适配界面。这个界面同时影响 correctness 和性能。",
+        whyNext: "layout 转换能让完整 tensor 上卡，但还不能解决 GGML 的 VIEW、切片、transpose 等 lazy view 语义。",
+        workload: "需要建立 layout 元数据、转换缓存、边界 copy 策略和失败回退策略。它不是一次性搬运数据，而是贯穿整个 graph 生命周期。",
+        depends: "依赖 buffer 生命周期、TTNN layout API、GGML shape/stride 信息和跨 backend copy 路径。",
+        verify: "对 matmul 前后的输入输出做数值比对；检查 CPU fallback 后再回 Metalium 时 layout 没有被错误解释。",
+        chips: ["TILE_LAYOUT", "32x32 tile", "row-major bridge", "cross-backend copy"],
+        score: 88
+      },
+      {
+        name: "View / Stride 语义",
+        note: "lazy view 变真实 copy",
+        risk: "极高",
+        title: "6. View / Stride：一个 VIEW 就可能让子图崩掉",
+        summary: "博客把 VIEW 列为当时崩溃点，并指出 TTNN 对 stride/view 的支持与 GGML/PyTorch 的习惯不同。简单切片可能从 3 次分配变成 5 次分配。",
+        purpose: "让 GGML 的 `VIEW`、切片、reshape、permute、transpose 等视图类操作在 Tenstorrent backend 中有可执行语义。",
+        difficulty: "GGML 常用 stride 表达 lazy view，但 tiled tensor 没有同等 stride 支持。要么 materialize 成真实 tensor，要么做 graph scan/optimizer 找 fast path。",
+        whyNext: "只处理 view 还不够。模型权重和 activation 的 dtype/quantization 也必须转换到硬件支持的格式。",
+        workload: "这是高风险研发项。它会影响 LLM 中常见的 KV cache、attention reshape、head split、slice、broadcast，不能靠逐个 if 修完。",
+        depends: "依赖 layout bridge、buffer materialization 策略、scheduler fallback 能力，以及对模型 graph pattern 的理解。",
+        verify: "专门构造 VIEW/reshape/slice 单测；跑 TinyLLaMA、Gemma、RWKV 等不同结构，记录崩溃点与 CPU 对齐误差。",
+        chips: ["GGML_OP_VIEW", "stride", "materialize view", "graph scan"],
+        score: 96
+      },
+      {
+        name: "DType 与量化映射",
+        note: "不是所有 GGUF 都可跑",
+        risk: "高",
+        title: "7. DType：GGML 量化类型要映射到硬件原生类型",
+        summary: "Metalium 文档列出 GGML 类型到 BFLOAT16、BFLOAT8_B、BFLOAT4_B 等 Tenstorrent 类型的转换，也列出一批 unsupported 类型。FP32 在矩阵单元上不是原生支持。",
+        purpose: "把 GGUF 模型中的权重类型和运行时 activation 类型，转换成 TTNN/Metalium 支持且数值可接受的格式。",
+        difficulty: "类型能转换不代表精度、速度、显存都合理。文档还提示 `Q4_0`、`Q4_1` 因数值精度问题转 BFLOAT8，建议更偏向 `Q4_K_*`。",
+        whyNext: "dtype 映射完成后，scheduler 仍需要知道哪些 op 在当前 dtype/layout/shape 下真的能跑。",
+        workload: "需要为目标模型定义白名单：哪些 GGUF 量化可交付，哪些必须转换，哪些不支持。否则现场演示很容易因模型文件不同而失败。",
+        depends: "依赖 GGUF 类型识别、TTNN dtype 支持、量化误差评估和模型选择策略。",
+        verify: "用同一 prompt 对比 CPU baseline logits；覆盖 F32/F16/Q4_K/Q8_0/MXFP4 等关键类型。",
+        chips: ["BFLOAT16", "BFLOAT8_B", "BFLOAT4_B", "GGML_TYPE_Q4_K", "MXFP4"],
+        score: 82
+      },
+      {
+        name: "supports_op 能力声明",
+        note: "调度正确性的边界",
+        risk: "极高",
+        title: "8. supports_op：不能多报能力，也不能保守到没有价值",
+        summary: "`supports_op` 决定 GGML scheduler 是否把节点放到 Tenstorrent。博客记录的拒绝/缺失操作包括 ROPE、MUL_MAT、GET_ROWS、SOFT_MAX、VIEW，其中广播规则差异占了很大比例。",
+        purpose: "按 op、dtype、shape、layout、broadcast、device buffer 状态判断当前节点是否能由 Metalium backend 执行。",
+        difficulty: "很多失败不是 op 名字不支持，而是某个 shape、broadcast、view、dtype 组合不支持。只按 op code 判断会导致调度错误或 graph assertion。",
+        whyNext: "能力判断之后，scheduler 才能把 graph 切成 CPU 子图和 Metalium 子图，并安排必要的 copy。",
+        workload: "这是持续迭代点。每加一个算子都要补 supports_op、执行实现、测试和 fallback 行为。",
+        depends: "依赖前面的 layout、view、dtype 语义已经可判断；也依赖 TTNN/Metalium 当前版本的 op 能力清单。",
+        verify: "记录每个被拒绝 op 的原因；对支持与不支持 case 各写单测；确保不支持时能 fallback 而不是崩溃。",
+        chips: ["ggml_backend_dev_supports_op", "ROPE", "MUL_MAT", "GET_ROWS", "SOFT_MAX", "broadcast"],
+        score: 94
+      },
+      {
+        name: "Graph Split 与 Fallback",
+        note: "混合执行成本",
+        risk: "高",
+        title: "9. Graph Split：每次 fallback 都可能付 layout 和 copy 成本",
+        summary: "Tenstorrent 早期状态是部分层或部分 op 上卡，其余 CPU 运行。由于 layout 不一致，CPU 与 Metalium 边界不是普通 memcpy，而可能伴随 layout materialization。",
+        purpose: "让 GGML scheduler 把完整 graph 切成多个 backend 可执行子图，并在边界插入 copy/sync。",
+        difficulty: "如果子图切得太碎，数据在 CPU row-major 与 TTNN tile layout 之间来回转换，性能可能比纯 CPU 更差。博客更新也提到早期更像 decelerator。",
+        whyNext: "切分后的 Metalium 子图最终需要进入 `graph_compute`，由 backend 转成 TTNN op 或 Metalium kernel。",
+        workload: "调度策略要和算子覆盖一起演进。短期重点是稳定，后期才是减少边界、扩大连续上卡区域。",
+        depends: "依赖 supports_op 准确、copy/sync 正确、fallback 路径可回收资源。",
+        verify: "输出 graph split 日志，统计 CPU/Metalium 子图数量、copy 次数、layout conversion 次数和 token latency。",
+        chips: ["ggml_backend_sched_split_graph", "CPU fallback", "layout conversion", "sync"],
+        score: 86
+      },
+      {
+        name: "graph_compute 到运行时",
+        note: "TTNN 优先，kernel 兜底",
+        risk: "高",
+        title: "10. graph_compute：从 GGML 抽象进入 TTNN / Metalium",
+        summary: "Metalium 文档说明 backend 尽量调用 TTNN operators；TTNN 不支持时，需要用 Metalium custom kernels 保持数据在设备上。",
+        purpose: "遍历被分配给 Metalium backend 的 GGML 子图，把每个节点映射成 TTNN 调用或自定义 Metalium kernel，并管理 event、sync、错误传播。",
+        difficulty: "TTNN 会编译甚至 JIT kernel，冷 cache 下初始化和 first token latency 会变长。自定义 kernel 又要求理解 Tenstorrent 的编程模型，而不是移植 CUDA/OpenCL kernel。",
+        whyNext: "能执行一个子图后，还要验证模型级正确性、长序列稳定性和多轮 decode 的状态一致性。",
+        workload: "这是核心执行层。TTNN 可以降低起步成本，但 TTNN 缺口、API 变化和性能路径仍需要 backend 自己补齐。",
+        depends: "依赖 op mapping、layout/dtype、runtime 初始化、kernel cache、error handling。",
+        verify: "对每个 op 与 CPU reference 比对；记录冷启动/热启动 first token；关闭部分 op 测 fallback 是否稳定。",
+        chips: ["ggml_backend_graph_compute", "TTNN op", "Metalium kernel", "JIT cache"],
+        score: 89
+      },
+      {
+        name: "模型级正确性",
+        note: "首 token 不等于可交付",
+        risk: "高",
+        title: "11. 模型级正确性：跑出 token 只是里程碑",
+        summary: "博客 2024-10-28 记录从首 token 到连续生成，再到 RWKV v6 Finch 运行，但仍是有限模型、有限 layer 的阶段性进展。讨论区也提到只验证较小模型。",
+        purpose: "把单 op 正确性提升到完整模型、长上下文、多轮 decode、不同量化格式和不同 prompt 下的稳定输出。",
+        difficulty: "LLM 推理的错误可能表现为数值微小偏差、后续 token 发散、KV cache 错位、attention mask 错误或特定模型结构不支持。",
+        whyNext: "模型级稳定后，才有资格讨论生产化、多并发、多卡、上游合入和长期维护。",
+        workload: "需要形成测试矩阵，而不是只保留一条 demo 命令。至少要覆盖 TinyLLaMA/Gemma/RWKV、不同量化、短长 prompt、batch 和回退路径。",
+        depends: "依赖算子覆盖、KV cache 策略、dtype 精度、fallback 无损和错误日志可定位。",
+        verify: "固定 seed/prompt 做 logits diff；跑到 EOT；长上下文 decode；对比 CPU 输出和性能退化点。",
+        chips: ["TinyLLaMA", "Gemma 2B", "RWKV v6", "logits diff", "EOT"],
+        score: 83
+      },
+      {
+        name: "生产化与上游维护",
+        note: "个人分支到工程产品",
+        risk: "极高",
+        title: "12. 生产化：真正的成本在持续维护",
+        summary: "Metalium 文档强调该 backend 不是 Tenstorrent 官方产品，属于实验软件。GitHub compare 当前显示 449 commits、54 files changed，说明它已经不是一个小补丁。",
+        purpose: "把能跑 demo 的 backend 变成可交付组件：版本锁定、CI、文档、错误诊断、性能回归、多模型矩阵、上游接口跟进。",
+        difficulty: "TTNN/Metalium 是 moving target；GGML 主线也持续变化。个人分支可快速试错，但公司交付需要可复现、可升级、可回滚。",
+        whyNext: "这一层没有“下一步代码”，而是产品化决策：短期 demo、内部 fork、上游 PR、还是转向 vLLM/编译器栈，要根据目标客户和并发需求选择。",
+        workload: "可以按三阶段估算：先跑通核心模型；再扩算子和布局稳定性；最后做性能、多卡、并发、CI 和上游维护。每阶段都可能持续数周到数月。",
+        depends: "依赖前 11 步基本稳定，并且有硬件、SDK 团队、模型团队、测试资源持续投入。",
+        verify: "新 SDK 版本能重建；主线 rebase 可控；核心模型性能不回退；故障能定位到 GGML、backend、TTNN 或驱动层。",
+        chips: ["449 commits", "54 files changed", "experimental", "moving target", "CI matrix"],
+        score: 98
+      }
+    ];
+
+    const flow = document.getElementById("flow");
+    const progressBar = document.getElementById("progressBar");
+    const progressText = document.getElementById("progressText");
+    const progressName = document.getElementById("progressName");
+    const prevBtn = document.getElementById("prevBtn");
+    const nextBtn = document.getElementById("nextBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const difficultyBar = document.getElementById("difficultyBar");
+    let current = 0;
+
+    function renderFlow() {
+      flow.innerHTML = "";
+      steps.forEach((step, index) => {
+        const button = document.createElement("button");
+        button.className = "stage";
+        button.type = "button";
+        button.innerHTML = `
+          <span class="num">${index + 1}</span>
+          <span>
+            <span class="name">${step.name}</span>
+            <span class="note">${step.note}</span>
+          </span>
+          <span class="risk">${step.risk}</span>
+        `;
+        button.addEventListener("click", () => setStep(index));
+        flow.appendChild(button);
+      });
+    }
+
+    function renderStep() {
+      const step = steps[current];
+      document.getElementById("stepEyebrow").textContent = `Step ${current + 1} / ${steps.length}`;
+      document.getElementById("stepTitle").textContent = step.title;
+      document.getElementById("stepSummary").textContent = step.summary;
+      document.getElementById("purpose").textContent = step.purpose;
+      document.getElementById("difficulty").textContent = step.difficulty;
+      document.getElementById("whyNext").textContent = step.whyNext;
+      document.getElementById("workload").textContent = step.workload;
+      document.getElementById("depends").textContent = step.depends;
+      document.getElementById("verify").textContent = step.verify;
+      difficultyBar.style.width = `${step.score}%`;
+
+      const chips = document.getElementById("chips");
+      chips.innerHTML = "";
+      step.chips.forEach((chip) => {
+        const span = document.createElement("span");
+        span.className = "chip";
+        span.textContent = chip;
+        chips.appendChild(span);
+      });
+
+      progressBar.style.width = `${((current + 1) / steps.length) * 100}%`;
+      progressText.textContent = `${current + 1} / ${steps.length}`;
+      progressName.textContent = step.name;
+      prevBtn.disabled = current === 0;
+      nextBtn.disabled = current === steps.length - 1;
+
+      [...flow.children].forEach((button, index) => {
+        button.classList.toggle("active", index === current);
+        button.classList.toggle("done", index < current);
+      });
+    }
+
+    function setStep(index) {
+      current = Math.max(0, Math.min(steps.length - 1, index));
+      renderStep();
+    }
+
+    prevBtn.addEventListener("click", () => setStep(current - 1));
+    nextBtn.addEventListener("click", () => setStep(current + 1));
+    resetBtn.addEventListener("click", () => setStep(0));
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowRight") {
+        setStep(current + 1);
+      } else if (event.key === "ArrowLeft") {
+        setStep(current - 1);
+      }
+    });
+
+    renderFlow();
+    renderStep();
+  </script>
+</body>
+</html>
